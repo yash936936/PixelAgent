@@ -103,3 +103,33 @@ Append to the bottom of this file after each pass:
   planner's network call).
 - Result: **Pass.**
 
+### [2026-07-11] Debug pass — Phase 2 complete
+- Files checked: `src/perception/ocr.py`, `src/perception/element_detector.py`,
+  `src/perception/screen_diff.py`, `src/action/mouse_keyboard.py`, `src/action/action_router.py` (desktop
+  branch), `src/brain/replanner.py`, `src/brain/orchestrator.py` (verify/replan loop), `src/main.py`
+  (updated wiring).
+- Issues found:
+  1. `orchestrator.py`'s first draft called `PlaywrightDriver` for verification screenshots only, which
+     meant desktop-only tasks (no browser involved) would never get verified — fixed by preferring
+     `MouseKeyboard.screenshot()` first (covers both web and desktop since it captures the whole screen),
+     falling back to the browser screenshot only if no `MouseKeyboard` is configured.
+  2. `_execute_and_verify`'s recursive retry did not cap total recursion depth independently of
+     `Replanner.max_retries` — confirmed this is safe because `Replanner.correct()` itself raises
+     `ReplanExhausted` once `attempt > max_retries`, so recursion in `orchestrator.py` is bounded by that,
+     not by orchestrator code; added `test_max_steps_exceeded_raises` and
+     `test_replan_triggered_on_screen_mismatch` to lock in both the replan path and the step-budget path.
+  3. `ActionRouter._resolve_coords` originally didn't distinguish "no OCR engine configured" from "OCR
+     found nothing" — both would have raised the same generic error, making it hard to tell a config problem
+     from a genuine "element not on screen" case. Fixed by raising `UnsupportedTargetType` for the former and
+     a plain `ValueError` for the latter; added separate tests for each.
+- Issues NOT fixed (external blockers): live OCR against a real screenshot (needs the Tesseract binary
+  installed, not just the `pytesseract` Python wrapper) and live mouse/keyboard control (needs a real
+  display) — both require the user's actual Windows machine, not this build environment.
+- Tests run: `python -c "import ..."` clean-import check on all Phase 2 modules — no errors; `python -m
+  pytest tests/ -v` — 51/51 passed (16 Phase 1 + 35 Phase 2, including the new `test_orchestrator.py`
+  integration-style tests that exercise the gate/verify/replan wiring together, not just each module in
+  isolation).
+- Result: **Pass** for everything testable in this environment. Live screen/OCR/mouse control still needs
+  to be verified by the user on Windows before calling Phase 2 fully done per `PHASES.md`'s success
+  criterion.
+

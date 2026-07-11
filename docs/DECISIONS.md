@@ -64,6 +64,29 @@ made by adding a new dated entry, not editing old ones.
 - **Impacts:** `TRD.md §5` risk classification table; `src/confirmation/gate.py` design in `PHASES.md` Part
   1.4.
 
+### [2026-07-11] Phase 2 implemented (all 3 parts)
+- **Type:** New file (multiple) + Overwrite
+- **File(s) affected:** `src/perception/ocr.py`, `src/perception/element_detector.py`,
+  `src/perception/screen_diff.py` (new), `src/action/mouse_keyboard.py` (new),
+  `src/action/action_router.py` (updated — added desktop branch), `src/brain/replanner.py` (new),
+  `src/brain/orchestrator.py` (updated — added verify/replan loop), `src/main.py` (updated — wires
+  MouseKeyboard/OCREngine/Replanner in), `requirements.txt` (added pytesseract, pillow, pyautogui), plus 5
+  new test files (`tests/perception/test_element_detector.py`, `test_screen_diff.py`,
+  `tests/action/test_mouse_keyboard.py`, `tests/brain/test_replanner.py`, `tests/brain/test_orchestrator.py`)
+  and an expanded `tests/action/test_action_router.py`.
+- **What changed:** Implemented every file listed in `PHASES.md` Parts 2.1–2.3. `ActionRouter` gained a
+  `desktop` branch that resolves a click target either from explicit x/y or by OCR-locating `target_text`
+  on a fresh screenshot. `Orchestrator` gained a verify step: it captures a before/after screenshot around
+  each executed step and, on a mismatch (via `screen_diff.matches_expected`), hands the failure to
+  `Replanner.correct()` for a corrected step, retried up to `Replanner`'s own `max_retries`. Verification is
+  best-effort — if no screenshot source is configured (no `MouseKeyboard` and the browser screenshot fails),
+  it's silently skipped rather than failing the task, so Phase 1-only configurations still work unchanged.
+- **Why:** User requested Phase 2 implementation, part by part, with a deliverable zip.
+- **Impacts:** `docs/STATUS.md` updated to reflect all Phase 2 files as Complete; `docs/DEBUG.md` gained a
+  Phase 2 debug-pass entry. Phase 3 (memory) can now build on a stable `Orchestrator`/`ActionRouter`
+  interface — no further signature changes anticipated for those two files in Phase 3 per `PHASES.md` Part
+  3.1's description (only `episodic_store.py` lookups get added around the existing loop).
+
 ### [2026-07-11] LLM backend swapped: Anthropic -> Gemini (free-tier)
 - **Type:** Overwrite (multiple)
 - **File(s) affected:** `requirements.txt`, `.env.example`, `src/config.py`, `src/brain/planner.py`,

@@ -9,12 +9,30 @@ import sys
 
 from src import config
 from src.action.action_router import ActionRouter
+from src.action.mouse_keyboard import MouseKeyboard
 from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
 from src.brain.planner import HostedLLMPlanner
+from src.brain.replanner import Replanner
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.observability.logger import Logger
+from src.perception.ocr import OCREngine
+
+
+def _build_desktop_backends():
+    """Desktop control (MouseKeyboard) and OCR require a real display/OS and
+    the Tesseract binary respectively — both optional at runtime. If either
+    is unavailable, Pixel still works for browser-only tasks; only
+    target_type='desktop' steps require them (see docs/PHASES.md Part 2.2)."""
+    try:
+        mouse_keyboard = MouseKeyboard()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Desktop control unavailable ({exc}); web-only mode.")
+        mouse_keyboard = None
+
+    ocr_engine = OCREngine()  # cheap to construct; fails only when .read() is called
+    return mouse_keyboard, ocr_engine
 
 
 def main(instruction: str) -> dict:
@@ -23,9 +41,13 @@ def main(instruction: str) -> dict:
     logger = Logger(cfg.log_dir)
     planner = HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
     gate = ConfirmationGate(prompt_fn=console_prompt)
+    replanner = Replanner(planner=planner)
+    mouse_keyboard, ocr_engine = _build_desktop_backends()
 
     with PlaywrightDriver(cfg.default_chrome_profile, cfg.profiles_dir) as driver:
-        router = ActionRouter(playwright_driver=driver)
+        router = ActionRouter(
+            playwright_driver=driver, mouse_keyboard=mouse_keyboard, ocr_engine=ocr_engine
+        )
         orchestrator = Orchestrator(
             planner=planner,
             driver=driver,
@@ -33,6 +55,8 @@ def main(instruction: str) -> dict:
             gate=gate,
             logger=logger,
             max_steps=cfg.max_steps_per_task,
+            mouse_keyboard=mouse_keyboard,
+            replanner=replanner,
         )
         result = orchestrator.run_task(instruction)
 
