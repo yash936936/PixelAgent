@@ -5,8 +5,13 @@ checks whether an action produced the expected screen change, and
 replanner.py is asked for a corrected step on mismatch (bounded by
 Replanner's own max_retries). Verification is best-effort: if no screenshot
 source is configured, it's skipped rather than failing the task, so this
-class still works in Phase-1-only configurations. See docs/PHASES.md Part 1.2
-and Part 2.3.
+class still works in Phase-1-only configurations. Phase 3 adds an episodic
+replay attempt before fresh planning: if memory_api.py finds a matching past
+successful task, its step plan is replayed (still gated/verified exactly
+like a freshly-planned step) instead of paying for a planner call per step;
+any replay failure falls back to fresh planning for the remaining steps
+rather than failing the task. See docs/PHASES.md Part 1.2, Part 2.3, and
+Part 3.1.
 """
 from __future__ import annotations
 
@@ -18,11 +23,21 @@ from src.brain.planner import PlannerBackend
 from src.brain.replanner import ReplanExhausted, Replanner
 from src.brain.risk_classifier import Risk, RiskClassifier
 from src.confirmation.gate import ConfirmationGate, GateDecision
+from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger
 from src.perception import screen_diff
 
 # Actions that shouldn't be expected to visibly change the screen.
 _NO_VISIBLE_CHANGE_ACTIONS = {"screenshot"}
+
+# Synthetic step logged when an episodic replay attempt begins, for trace
+# readability -- it's never sent to the action router or confirmation gate.
+_REPLAY_START_STEP = {
+    "action": "replay_start",
+    "description": "attempting episodic replay",
+    "target_type": "web",
+    "params": {},
+}
 
 
 class MaxStepsExceeded(Exception):
@@ -42,6 +57,7 @@ class Orchestrator:
         mouse_keyboard: MouseKeyboard | None = None,
         replanner: Replanner | None = None,
         enable_verification: bool = True,
+        memory: MemoryAPI | None = None,
     ) -> None:
         self._planner = planner
         self._driver = driver
@@ -55,12 +71,37 @@ class Orchestrator:
         # Verification only actually runs if we have both a screenshot source
         # and a replanner to hand a mismatch to — otherwise it's a no-op.
         self._enable_verification = enable_verification
+        # Episodic replay only actually runs if a MemoryAPI is supplied —
+        # otherwise every task is freshly planned, matching Phase 1/2 behavior.
+        self._memory = memory
 
     def run_task(self, instruction: str) -> dict:
         history: list[dict] = []
         outcome_status = "incomplete"
+        start_step = 1
 
-        for step_num in range(1, self._max_steps + 1):
+        if self._memory is not None:
+            episode = self._memory.find_replay(instruction)
+            if episode is not None:
+                replayed, replay_ok = self._replay_episode(instruction, episode, history)
+                start_step = replayed + 1
+                if replay_ok:
+                    outcome_status = "done"
+                    self._logger.log_step(
+                        replayed,
+                        {"action": "done", "description": "replay complete", "target_type": "web", "params": {}},
+                        {"status": "task_complete_via_replay", "source_episode_id": episode.id},
+                    )
+                    result = {"instruction": instruction, "history": history, "status": outcome_status}
+                    self._logger.log_task_complete(result)
+                    self._memory.record_task(instruction, history, outcome_status)
+                    return result
+                # Replay stopped partway (gate denial, execution error, or
+                # exhausted replan) -- fall through to fresh planning for the
+                # remaining steps, using what replay already executed as
+                # context/history rather than starting over from scratch.
+
+        for step_num in range(start_step, self._max_steps + 1):
             screen_state = self._observe()
             step = self._planner.next_step(instruction, screen_state, history)
 
@@ -103,7 +144,48 @@ class Orchestrator:
 
         result = {"instruction": instruction, "history": history, "status": outcome_status}
         self._logger.log_task_complete(result)
+        if self._memory is not None:
+            self._memory.record_task(instruction, history, outcome_status)
         return result
+
+    def _replay_episode(self, instruction: str, episode, history: list[dict]) -> tuple[int, bool]:
+        """Attempts to replay a matched past episode's step plan verbatim,
+        skipping fresh LLM planning calls for as many steps as replay stays
+        valid. Each replayed step still goes through the same risk
+        classification, confirmation gate, and verification as a freshly
+        planned step -- replay is a planning shortcut, never a safety
+        shortcut. Returns (steps_replayed, fully_succeeded); on any gate
+        denial, execution error, or exhausted replan, stops early so the
+        caller can fall back to fresh planning for the rest of the task."""
+        self._logger.log_step(
+            0, _REPLAY_START_STEP, {"status": "replay_attempt", "source_episode_id": episode.id}
+        )
+
+        for idx, step in enumerate(episode.steps, start=1):
+            screen_state = self._observe()
+            risk = self._risk_classifier.classify(step)
+
+            if self._risk_classifier.needs_confirmation(risk):
+                decision = self._gate.request_approval(step, risk)
+                self._logger.log_gate_decision(idx, step, risk, decision)
+                if decision.verdict != "approved":
+                    return idx - 1, False
+                if decision.edited_step is not None:
+                    step = decision.edited_step
+
+            try:
+                outcome = self._execute_and_verify(instruction, step, screen_state, history, idx)
+            except ReplanExhausted as exc:
+                self._logger.log_step(idx, step, {"status": "replay_replan_exhausted", "error": str(exc)})
+                return idx - 1, False
+            except Exception as exc:  # noqa: BLE001 - replay is best-effort, fall back to fresh planning
+                self._logger.log_step(idx, step, {"status": "replay_error", "error": str(exc)})
+                return idx - 1, False
+
+            history.append({"step": step, "outcome": outcome})
+            self._logger.log_step(idx, step, outcome, risk=risk)
+
+        return len(episode.steps), True
 
     def _observe(self) -> dict:
         return {

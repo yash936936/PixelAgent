@@ -16,6 +16,7 @@ from src.brain.planner import HostedLLMPlanner
 from src.brain.replanner import Replanner
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
+from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger
 from src.perception.ocr import OCREngine
 
@@ -42,6 +43,7 @@ def main(instruction: str) -> dict:
     planner = HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
     gate = ConfirmationGate(prompt_fn=console_prompt)
     replanner = Replanner(planner=planner)
+    memory = MemoryAPI(log_dir=cfg.log_dir)
     mouse_keyboard, ocr_engine = _build_desktop_backends()
 
     with PlaywrightDriver(cfg.default_chrome_profile, cfg.profiles_dir) as driver:
@@ -57,9 +59,11 @@ def main(instruction: str) -> dict:
             max_steps=cfg.max_steps_per_task,
             mouse_keyboard=mouse_keyboard,
             replanner=replanner,
+            memory=memory,
         )
         result = orchestrator.run_task(instruction)
 
+    memory.close()
     print(f"\nTask finished with status: {result['status']}")
     print(f"Full trace: {logger.log_path}")
     return result

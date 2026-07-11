@@ -87,7 +87,33 @@ made by adding a new dated entry, not editing old ones.
   interface — no further signature changes anticipated for those two files in Phase 3 per `PHASES.md` Part
   3.1's description (only `episodic_store.py` lookups get added around the existing loop).
 
-### [2026-07-11] LLM backend swapped: Anthropic -> Gemini (free-tier)
+### [2026-07-11] Phase 3 implemented (both parts: episodic + semantic memory)
+- **Type:** New file (multiple) + overwrite
+- **File(s) affected:** `src/memory/episodic_store.py` (new), `src/memory/semantic_store.py` (new),
+  `src/memory/memory_api.py` (new), `src/brain/orchestrator.py` (updated), `src/main.py` (updated), plus
+  `tests/memory/test_episodic_store.py`, `tests/memory/test_semantic_store.py`,
+  `tests/memory/test_memory_api.py`, `tests/brain/test_orchestrator_replay.py`, and `src/memory/__init__.py`
+  / `tests/memory/__init__.py` package files.
+- **What changed:** `episodic_store.py` persists (instruction, step plan, outcome, timestamp) per completed
+  task in SQLite and exposes `find_match()`, a difflib-based near-duplicate lookup restricted to
+  `status == "done"` episodes (threshold 0.82 on normalized instruction text). `semantic_store.py` is a
+  namespaced SQLite key-value store for durable facts (a reserved `_preferences` namespace plus one
+  namespace per site/app for learned UI quirks). `memory_api.py` is the single interface both stores go
+  through, per `context.md`'s file map — `orchestrator.py` and `planner.py` never touch the stores directly.
+  `orchestrator.py` now takes an optional `memory` param: before fresh planning, it calls
+  `memory.find_replay()`; on a match it replays the stored step plan (still through the same risk
+  classifier, confirmation gate, and verification/replan path as a freshly planned step — replay is a
+  planning shortcut, never a safety shortcut), and falls back to fresh planning for any remaining steps on
+  gate denial, execution error, or exhausted replan. Every completed task (replayed or freshly planned) is
+  recorded back to `memory.record_task()`. `main.py` constructs a `MemoryAPI` from `cfg.log_dir` and passes
+  it into `Orchestrator`, closing it after the run.
+- **Why:** User requested Phase 3 implementation, part by part, with a deliverable zip.
+- **Impacts:** `docs/STATUS.md` updated to mark all Phase 3 files Complete and bump overall progress to
+  Phase 3. Full test suite re-run clean: 75/75 passing (51 from Phases 1-2 plus 24 new Phase 3 tests across
+  `tests/memory/` and `tests/brain/test_orchestrator_replay.py`). No changes needed to `action/`,
+  `perception/`, or `confirmation/` — Phase 3 only touches `memory/`, `brain/orchestrator.py`, and
+  `main.py`, matching `docs/PHASES.md`'s file list for Phase 3 exactly (no deviation this time).
+
 - **Type:** Overwrite (multiple)
 - **File(s) affected:** `requirements.txt`, `.env.example`, `src/config.py`, `src/brain/planner.py`,
   `src/main.py`, `docs/TRD.md §2`
