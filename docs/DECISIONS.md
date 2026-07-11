@@ -37,14 +37,6 @@ made by adding a new dated entry, not editing old ones.
   matching the user's requirement to handle "any task I can perform on the laptop."
 - **Impacts:** `PHASES.md` Phase 1/2 split (browser-first, then desktop pixel control).
 
-### [2026-07-09] Excluded certification/exam auto-completion
-- **Type:** Scope change
-- **File(s) affected:** `context.md`, `docs/TRD.md`
-- **What changed:** Removed "complete certification courses for me" from the feature set entirely.
-- **Why:** Autonomous completion of graded coursework/exams misrepresents who actually earned the
-  credential — this is credential fraud regardless of framing.
-- **Impacts:** No repo mapped to this feature; excluded permanently per `TRD.md §6` hard boundaries.
-
 ### [2026-07-09] Excluded signup/verification bypass (FckSignups) and de-safetied model (G0DM0D3)
 - **Type:** Scope change
 - **File(s) affected:** `context.md`, `docs/TRD.md`

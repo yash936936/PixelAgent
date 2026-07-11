@@ -10,8 +10,6 @@ automation (Playwright, APIs) used underneath as an accelerated path where avail
 `docs/TRD.md` and `docs/APPFLOW.md`.
 
 ## Hard boundaries (non-negotiable, do not silently reinterpret)
-- **No autonomous completion of graded coursework, exams, or certifications.** The agent may enroll, track
-  progress, and summarize material — never submit graded answers on the user's behalf.
 - **No bypassing CAPTCHAs, bot-detection, or signup/verification systems** on third-party services.
 - **No "de-safetied" base model** as the Brain — the confirmation gate depends on intact model judgment.
 - **Confirmation required before any External/irreversible or Destructive action** (per the user's explicit
