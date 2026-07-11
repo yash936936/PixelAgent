@@ -133,3 +133,36 @@ Append to the bottom of this file after each pass:
   to be verified by the user on Windows before calling Phase 2 fully done per `PHASES.md`'s success
   criterion.
 
+### [2026-07-11] Phase 5 debug pass — risk_classifier.py expansion + trace_replay.py
+- Files reviewed line-by-line: `src/brain/risk_classifier.py` (full rewrite of keyword tables + new guard
+  logic), `src/observability/trace_replay.py` (new).
+- Issues found and fixed during this pass:
+  1. First draft of the expanded External keyword list included bare `"review"` and `"rate"` — both would
+     have false-positived on extremely common read-only/benign phrasing (e.g. "review the document",
+     "rate limit"). Replaced with narrower, intent-specific phrases (`"submit review"`, `"write a review"`,
+     `"leave a rating"`) that don't collide with ordinary text.
+  2. The read-only-guard (`_READ_ONLY_GUARDS`) needed a second check (`_has_actual_verb`) so a sentence
+     like "check if the delete button works, then click delete" doesn't get incorrectly downgraded just
+     because it also contains a guard phrase — added a test (`test_read_only_guard_does_not_suppress_real_click`)
+     to lock this in, alongside the base case
+     (`test_read_only_check_for_delete_button_not_escalated`).
+  3. `trace_replay.py`'s `screenshot_path` originally only checked `step["screenshot"]`; `outcome` payloads
+     from `action_router.py`/`perception` can also carry a screenshot reference, so both containers are now
+     checked. Verified with `test_screenshots_deduplicated_in_order` using a screenshot recorded on
+     `outcome` only.
+  4. `TraceReplay.load()` initially let malformed JSON lines pass through as skipped rows — changed to
+     raise `TraceLoadError` immediately (per docs/DEBUG.md's general principle of failing loud), since a
+     silently-incomplete trace is worse than a load failure the developer can see.
+- Issues NOT fixed (out of scope / external blockers): the expanded keyword tables are still static/rule-
+  based and can't yet be validated against genuine Phase 1-4 usage logs, since no live run has happened
+  outside this build environment (same blocker noted throughout Phases 2-4). Real-log validation is the
+  Phase 5 follow-up noted in `docs/STATUS.md`'s Next action.
+- Tests run: `python -m pytest tests/ -v` — 121/121 passed (97 pre-existing Phase 1-4 tests, unmodified and
+  still green, + 24 new: 11 in `test_risk_classifier.py`, 13 in the new `test_trace_replay.py`). Also ran
+  `python -m src.observability.trace_replay <demo_log_dir>` manually against a hand-built sample
+  `.jsonl` trace to confirm the CLI path (not just the unit tests) produces correct step/gate/event/
+  task_complete summary lines end to end.
+- Result: **Pass** for everything testable in this environment. Phase 5's "no unclassified/misclassified
+  risk cases observed in a full regression pass over logged tasks" criterion still needs a real corpus of
+  logged tasks from live use to fully verify — `unclassified_or_missing_risk()` on `TraceReplay` is the
+  tool for the user to run that check once such logs exist.

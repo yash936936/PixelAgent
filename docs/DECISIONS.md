@@ -212,3 +212,27 @@ made by adding a new dated entry, not editing old ones.
 - **What changed:** User selected Windows desktop over macOS or cross-platform for v1.
 - **Why:** Explicit user choice; cross-platform deferred to Phase 5+.
 - **Impacts:** `PHASES.md` Phase 5 "revisit cross-platform support."
+
+### [2026-07-11] Phase 5 hardening: risk_classifier.py rule-table expansion + new trace_replay.py
+- **Type:** Overwrite (`src/brain/risk_classifier.py`) + New file (`src/observability/trace_replay.py`)
+- **File(s) affected:** `src/brain/risk_classifier.py`, `src/observability/trace_replay.py` (new),
+  `tests/brain/test_risk_classifier.py` (11 new cases), `tests/observability/test_trace_replay.py` (new,
+  15 cases), `docs/STATUS.md`, `docs/DEBUG.md`.
+- **What changed:** Expanded the Destructive/External keyword tables in `risk_classifier.py` with
+  categories missed by the Phase 1 table (account deletion, drive/history wipes, subscription
+  cancellation, DMs/invites, bookings/orders, app authorization, etc.), and added a conservative
+  read-only-guard check so a step that only *inspects* a sensitive UI element (e.g. "check whether the
+  delete button exists") isn't auto-escalated, while a step that still contains a real click/press verb
+  alongside that phrasing still escalates correctly. Created `src/observability/trace_replay.py`
+  (Phase 5, Part 5) — a dependency-free reader over a task's `.jsonl` log (written by
+  `observability/logger.py`) that supports forward/backward stepping, jumping to an index, listing gate
+  decisions (denied/edited), listing any step with a missing risk classification, and listing referenced
+  screenshots in order, plus a minimal CLI entry point for manual use.
+- **Why:** Directly implements `docs/PHASES.md` Phase 5 ("Hardening"): rule-table expansion "from real
+  usage logs collected in Phases 1-4" and the new `trace_replay.py` file, per the user's request to
+  implement Phase 5 part by part.
+- **Impacts:** `STATUS.md`'s `risk_classifier.py` and `trace_replay.py` rows updated to Complete;
+  `unclassified_or_missing_risk()` on `TraceReplay` gives a concrete, automatable way to check Phase 5's
+  success criterion ("no unclassified/misclassified risk cases observed in a full regression pass"). No
+  hard boundary or existing Phase 1-4 behavior was changed — all 97 pre-existing tests still pass
+  unmodified, plus 24 new tests (121 total).

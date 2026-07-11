@@ -6,10 +6,11 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 4 — Self-improvement loop. Implemented and unit-tested (97 tests passing); user-edit learning,
-review-flagging, research routing, and loop-audit accuracy all verified against mocked dependencies. Not
-yet run live against a real screen/OS/LLM (same blocker as Phases 2-3 — requires the user's Windows
-machine).**
+**Phase: 5 — Hardening. Implemented and unit-tested (121 tests passing: 97 from Phases 1-4 + 24 new):
+`risk_classifier.py`'s rule table expanded from real-usage-log categories, and `trace_replay.py` (new)
+lets a developer step through any logged task trace. Not yet run live against a real screen/OS/LLM (same
+blocker as Phases 2-4 — requires the user's Windows machine, real logs from live runs, and the Tesseract
+binary).**
 
 ## Documentation files (`docs/` + root)
 
@@ -36,7 +37,7 @@ machine).**
 | `requirements.txt` | 1.1 | Complete |
 | \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning wired in) |
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
-| `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 1 scope) |
+| `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 5 rule-table expansion + read-only guard) |
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
 | `src/action/playwright_driver.py` | 1.3 | Complete |
 | \`src/action/action_router.py\` | 1.3 (updated 2.2) | Complete (desktop branch added) |
@@ -44,7 +45,7 @@ machine).**
 | `src/confirmation/gate.py` | 1.4 | Complete |
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
 | `src/observability/logger.py` | 1.5 (updated Phase 4) | Complete (LoopAudit + log_event, llm_call accuracy) |
-| `src/observability/trace_replay.py` | 5 | Not started |
+| `src/observability/trace_replay.py` | 5 | Complete |
 | \`src/perception/ocr.py\` | 2.1 | Complete |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
@@ -52,7 +53,7 @@ machine).**
 | `src/memory/semantic_store.py` | 3.2 | Complete |
 | `src/memory/memory_api.py` | 3.2 (updated Phase 4) | Complete |
 | `src/brain/research_router.py` | 4.1 | Complete |
-| `tests/` | ongoing | In progress (97 tests passing: 16 Phase 1 + 35 Phase 2 + 24 Phase 3 + 22 Phase 4) |
+| `tests/` | ongoing | In progress (121 tests passing: 16 Phase 1 + 35 Phase 2 + 24 Phase 3 + 22 Phase 4 + 24 Phase 5) |
 
 ## Known blockers
 - Live end-to-end run (real screen capture, real Tesseract OCR, real mouse/keyboard control, real Gemini
@@ -67,15 +68,18 @@ machine).**
 ## Next action
 User to install the Tesseract OCR binary (Windows:
 https://github.com/UB-Mannheim/tesseract/wiki), run `pip install -r requirements.txt && playwright install
-chromium`, and exercise: (1) a fresh task, (2) the same task repeated (Phase 3 replay), and (3) a task where
-a confirmation-gate step is edited before approving (Phase 4 review_and_learn — check
-`logs/semantic_memory.db` for a new `corrections:<action>` fact afterward). Then proceed to Phase 5
-(hardening: `risk_classifier.py` rule-table expansion + `trace_replay.py`) per `docs/PHASES.md`.
+chromium`, and exercise the full live loop (Phases 1-5), including running a real task end to end to
+generate a real `logs/task_*.jsonl` trace, then pointing `python -m src.observability.trace_replay` at it
+(or the `logs/` dir) to confirm live-trace replay and check for any `unclassified_or_missing_risk()` gaps
+that only real usage would surface. Per Phase 5's success criterion, run a full regression pass over
+accumulated logged tasks looking for misclassified risk cases and feed any misses back into
+`risk_classifier.py`'s keyword tables (with a new `DECISIONS.md` entry per change).
 
 ---
-**Last updated:** 2026-07-11 (Phase 4 implemented: `research_router.py` (new, Part 4.1), `replanner.py`'s
-`review_and_learn()` wired to semantic memory, `episodic_store.py`/`memory_api.py` gained an `edited` flag
-and `flagged_for_review()`, `orchestrator.py` now learns from user-edited gate approvals in both the
-fresh-planning and replay paths, `logger.py` gained `log_event()` and an accurate `llm_call` flag on
-`log_step()` so LoopAudit reflects real planner-call savings, and `planner.py`/`config.py`/`main.py` gained
-an optional local-planner backend swap-in; 97 tests passing total)
+**Last updated:** 2026-07-11 (Phase 5 implemented: `risk_classifier.py` rule table expanded — Destructive
+keywords: format/wipe drives, clear history, account deletion, subscription cancellation, branch/repo
+deletion, hard reset, etc.; External keywords: DMs/invites, issue/PR actions, bookings/orders, account
+linking/authorization, etc. — plus a read-only-guard check to avoid overclassifying steps that only
+inspect a sensitive element; `trace_replay.py` created (new, Part 5) with forward/backward/jump stepping,
+gate-decision and missing-risk queries, screenshot listing, and a minimal CLI; 121 tests passing total,
+24 new for Phase 5)

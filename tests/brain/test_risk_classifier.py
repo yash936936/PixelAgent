@@ -42,3 +42,74 @@ def test_needs_confirmation():
     assert rc.needs_confirmation(Risk.LOCAL) is False
     assert rc.needs_confirmation(Risk.EXTERNAL) is True
     assert rc.needs_confirmation(Risk.DESTRUCTIVE) is True
+
+
+# --- Phase 5 hardening: expanded rule-table cases -------------------------
+
+def test_delete_account_classified_destructive():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Delete account permanently"}
+    assert rc.classify(step) == Risk.DESTRUCTIVE
+
+
+def test_format_drive_classified_destructive():
+    rc = RiskClassifier()
+    step = {"action": "run", "description": "Format drive C:"}
+    assert rc.classify(step) == Risk.DESTRUCTIVE
+
+
+def test_delete_branch_classified_destructive():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Delete branch feature/x on GitHub"}
+    assert rc.classify(step) == Risk.DESTRUCTIVE
+
+
+def test_cancel_subscription_classified_destructive():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Cancel subscription for this account"}
+    assert rc.classify(step) == Risk.DESTRUCTIVE
+
+
+def test_book_reservation_classified_external():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Book a table for 7pm"}
+    assert rc.classify(step) == Risk.EXTERNAL
+
+
+def test_direct_message_classified_external():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Send a DM to the user"}
+    assert rc.classify(step) == Risk.EXTERNAL
+
+
+def test_authorize_app_classified_external():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Authorize app to access account"}
+    assert rc.classify(step) == Risk.EXTERNAL
+
+
+def test_place_order_classified_external():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Place order for the cart items"}
+    assert rc.classify(step) == Risk.EXTERNAL
+
+
+def test_read_only_check_for_delete_button_not_escalated():
+    rc = RiskClassifier()
+    step = {"action": "inspect", "description": "Check whether the delete button exists on the page"}
+    assert rc.classify(step) == Risk.LOCAL
+
+
+def test_read_only_guard_does_not_suppress_real_click():
+    rc = RiskClassifier()
+    step = {
+        "action": "click",
+        "description": "Check if the delete button works, then click delete",
+    }
+    assert rc.classify(step) == Risk.DESTRUCTIVE
+
+
+def test_review_document_not_misclassified_external():
+    rc = RiskClassifier()
+    step = {"action": "read", "description": "Review the document contents"}
+    assert rc.classify(step) == Risk.LOCAL
