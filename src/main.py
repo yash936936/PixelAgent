@@ -12,7 +12,7 @@ from src.action.action_router import ActionRouter
 from src.action.mouse_keyboard import MouseKeyboard
 from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
-from src.brain.planner import HostedLLMPlanner
+from src.brain.planner import HostedLLMPlanner, LocalPlanner, build_http_generate_fn
 from src.brain.replanner import Replanner
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
@@ -36,11 +36,27 @@ def _build_desktop_backends():
     return mouse_keyboard, ocr_engine
 
 
+def _build_planner(cfg):
+    """Phase 4 (optional): PLANNER_BACKEND=local swaps in a cheaper
+    locally-hosted model for routine steps instead of the hosted Gemini
+    API, behind the same PlannerBackend interface -- risk classification
+    and confirmation gating in orchestrator.py are unaffected either way.
+    See docs/TRD.md §6 and docs/PHASES.md Phase 4."""
+    if cfg.planner_backend == "local":
+        if not cfg.local_planner_endpoint:
+            raise RuntimeError(
+                "PLANNER_BACKEND=local requires LOCAL_PLANNER_ENDPOINT to be set in .env."
+            )
+        generate_fn = build_http_generate_fn(cfg.local_planner_endpoint)
+        return LocalPlanner(generate_fn=generate_fn)
+    return HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
+
+
 def main(instruction: str) -> dict:
     cfg = config.load()
 
     logger = Logger(cfg.log_dir)
-    planner = HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
+    planner = _build_planner(cfg)
     gate = ConfirmationGate(prompt_fn=console_prompt)
     replanner = Replanner(planner=planner)
     memory = MemoryAPI(log_dir=cfg.log_dir)

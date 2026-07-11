@@ -10,8 +10,12 @@ replay attempt before fresh planning: if memory_api.py finds a matching past
 successful task, its step plan is replayed (still gated/verified exactly
 like a freshly-planned step) instead of paying for a planner call per step;
 any replay failure falls back to fresh planning for the remaining steps
-rather than failing the task. See docs/PHASES.md Part 1.2, Part 2.3, and
-Part 3.1.
+rather than failing the task. Phase 4 wires in the self-improvement loop:
+whenever the user edits a step before approving it, replanner.py's
+review_and_learn() writes the correction to semantic memory, and every
+completed task now records whether any edit happened so
+episodic_store.py's flagged_for_review() can surface it later. See
+docs/PHASES.md Part 1.2, Part 2.3, Part 3.1, and Phase 4.
 """
 from __future__ import annotations
 
@@ -29,15 +33,6 @@ from src.perception import screen_diff
 
 # Actions that shouldn't be expected to visibly change the screen.
 _NO_VISIBLE_CHANGE_ACTIONS = {"screenshot"}
-
-# Synthetic step logged when an episodic replay attempt begins, for trace
-# readability -- it's never sent to the action router or confirmation gate.
-_REPLAY_START_STEP = {
-    "action": "replay_start",
-    "description": "attempting episodic replay",
-    "target_type": "web",
-    "params": {},
-}
 
 
 class MaxStepsExceeded(Exception):
@@ -79,22 +74,23 @@ class Orchestrator:
         history: list[dict] = []
         outcome_status = "incomplete"
         start_step = 1
+        any_edits = False
 
         if self._memory is not None:
             episode = self._memory.find_replay(instruction)
             if episode is not None:
-                replayed, replay_ok = self._replay_episode(instruction, episode, history)
+                replayed, replay_ok, replay_edited = self._replay_episode(instruction, episode, history)
+                any_edits = any_edits or replay_edited
                 start_step = replayed + 1
                 if replay_ok:
                     outcome_status = "done"
-                    self._logger.log_step(
+                    self._logger.log_event(
                         replayed,
-                        {"action": "done", "description": "replay complete", "target_type": "web", "params": {}},
                         {"status": "task_complete_via_replay", "source_episode_id": episode.id},
                     )
                     result = {"instruction": instruction, "history": history, "status": outcome_status}
                     self._logger.log_task_complete(result)
-                    self._memory.record_task(instruction, history, outcome_status)
+                    self._memory.record_task(instruction, history, outcome_status, edited=any_edits)
                     return result
                 # Replay stopped partway (gate denial, execution error, or
                 # exhausted replan) -- fall through to fresh planning for the
@@ -107,7 +103,7 @@ class Orchestrator:
 
             if step["action"] == "done":
                 outcome_status = "done"
-                self._logger.log_step(step_num, step, {"status": "task_complete"})
+                self._logger.log_step(step_num, step, {"status": "task_complete"}, llm_call=True)
                 break
 
             risk = self._risk_classifier.classify(step)
@@ -119,6 +115,11 @@ class Orchestrator:
                     outcome_status = f"stopped_{decision.verdict}"
                     break
                 if decision.edited_step is not None:
+                    any_edits = True
+                    if self._replanner is not None:
+                        self._replanner.review_and_learn(
+                            instruction, step, decision.edited_step, memory=self._memory
+                        )
                     step = decision.edited_step
 
             try:
@@ -135,7 +136,7 @@ class Orchestrator:
                 break
 
             history.append({"step": step, "outcome": action_outcome})
-            self._logger.log_step(step_num, step, action_outcome, risk=risk)
+            self._logger.log_step(step_num, step, action_outcome, risk=risk, llm_call=True)
         else:
             raise MaxStepsExceeded(
                 f"Task did not complete within {self._max_steps} steps. "
@@ -145,20 +146,27 @@ class Orchestrator:
         result = {"instruction": instruction, "history": history, "status": outcome_status}
         self._logger.log_task_complete(result)
         if self._memory is not None:
-            self._memory.record_task(instruction, history, outcome_status)
+            self._memory.record_task(instruction, history, outcome_status, edited=any_edits)
         return result
 
-    def _replay_episode(self, instruction: str, episode, history: list[dict]) -> tuple[int, bool]:
+    def _replay_episode(
+        self, instruction: str, episode, history: list[dict]
+    ) -> tuple[int, bool, bool]:
         """Attempts to replay a matched past episode's step plan verbatim,
         skipping fresh LLM planning calls for as many steps as replay stays
         valid. Each replayed step still goes through the same risk
         classification, confirmation gate, and verification as a freshly
         planned step -- replay is a planning shortcut, never a safety
-        shortcut. Returns (steps_replayed, fully_succeeded); on any gate
-        denial, execution error, or exhausted replan, stops early so the
-        caller can fall back to fresh planning for the rest of the task."""
-        self._logger.log_step(
-            0, _REPLAY_START_STEP, {"status": "replay_attempt", "source_episode_id": episode.id}
+        shortcut. Returns (steps_replayed, fully_succeeded, any_edits); on
+        any gate denial, execution error, or exhausted replan, stops early
+        so the caller can fall back to fresh planning for the rest of the
+        task. A step actually executed during replay is logged with
+        llm_call=False, since no planner call was made for it -- this is
+        what makes the Phase 3/4 "fewer LLM calls on repeat tasks" success
+        criterion visible in the trace log's LoopAudit summary."""
+        any_edits = False
+        self._logger.log_event(
+            0, {"status": "replay_attempt", "source_episode_id": episode.id}
         )
 
         for idx, step in enumerate(episode.steps, start=1):
@@ -169,23 +177,28 @@ class Orchestrator:
                 decision = self._gate.request_approval(step, risk)
                 self._logger.log_gate_decision(idx, step, risk, decision)
                 if decision.verdict != "approved":
-                    return idx - 1, False
+                    return idx - 1, False, any_edits
                 if decision.edited_step is not None:
+                    any_edits = True
+                    if self._replanner is not None:
+                        self._replanner.review_and_learn(
+                            instruction, step, decision.edited_step, memory=self._memory
+                        )
                     step = decision.edited_step
 
             try:
                 outcome = self._execute_and_verify(instruction, step, screen_state, history, idx)
             except ReplanExhausted as exc:
                 self._logger.log_step(idx, step, {"status": "replay_replan_exhausted", "error": str(exc)})
-                return idx - 1, False
+                return idx - 1, False, any_edits
             except Exception as exc:  # noqa: BLE001 - replay is best-effort, fall back to fresh planning
                 self._logger.log_step(idx, step, {"status": "replay_error", "error": str(exc)})
-                return idx - 1, False
+                return idx - 1, False, any_edits
 
             history.append({"step": step, "outcome": outcome})
-            self._logger.log_step(idx, step, outcome, risk=risk)
+            self._logger.log_step(idx, step, outcome, risk=risk, llm_call=False)
 
-        return len(episode.steps), True
+        return len(episode.steps), True, any_edits
 
     def _observe(self) -> dict:
         return {

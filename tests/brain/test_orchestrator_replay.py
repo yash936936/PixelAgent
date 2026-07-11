@@ -44,7 +44,7 @@ def test_matching_episode_is_replayed_without_planner_calls():
     assert result["status"] == "done"
     planner.next_step.assert_not_called()
     action_router.execute.assert_called_once_with(replayed_step)
-    memory.record_task.assert_called_once_with("open x.com", result["history"], "done")
+    memory.record_task.assert_called_once_with("open x.com", result["history"], "done", edited=False)
 
 
 def test_no_matching_episode_falls_back_to_fresh_planning():
@@ -62,7 +62,7 @@ def test_no_matching_episode_falls_back_to_fresh_planning():
 
     assert result["status"] == "done"
     planner.next_step.assert_called()
-    memory.record_task.assert_called_once_with("open x.com", result["history"], "done")
+    memory.record_task.assert_called_once_with("open x.com", result["history"], "done", edited=False)
 
 
 def test_replay_gate_denial_falls_back_to_fresh_planning():
@@ -117,3 +117,58 @@ def test_no_memory_configured_behaves_like_phase_two():
     )
     result = orch.run_task("do something")
     assert result["status"] == "done"
+
+
+def test_edited_step_during_fresh_planning_calls_review_and_learn_and_flags_edited():
+    memory = MagicMock()
+    memory.find_replay.return_value = None
+    replanner = MagicMock()
+
+    original_step = {"action": "click", "description": "star repo", "target_type": "web",
+                      "params": {"selector": "#star"}}
+    edited_step = {"action": "click", "description": "star repo (edited)", "target_type": "web",
+                    "params": {"selector": "#star-alt"}}
+
+    orch, action_router, gate, planner, logger = make_orchestrator_with_memory(
+        memory,
+        planner_steps=[
+            original_step,
+            {"action": "done", "description": "finished", "target_type": "web", "params": {}},
+        ],
+    )
+    orch._replanner = replanner
+    gate.request_approval.return_value = GateDecision(verdict="approved", edited_step=edited_step)
+
+    result = orch.run_task("star the repo")
+
+    assert result["status"] == "done"
+    action_router.execute.assert_called_once_with(edited_step)
+    replanner.review_and_learn.assert_called_once_with(
+        "star the repo", original_step, edited_step, memory=memory
+    )
+    memory.record_task.assert_called_once_with("star the repo", result["history"], "done", edited=True)
+
+
+def test_edited_step_during_replay_flags_edited_and_learns():
+    memory = MagicMock()
+    replanner = MagicMock()
+
+    original_step = {"action": "click", "description": "star repo", "target_type": "web",
+                      "params": {"selector": "#star"}}
+    edited_step = {"action": "click", "description": "star repo (edited)", "target_type": "web",
+                    "params": {"selector": "#star-alt"}}
+    episode = MagicMock(id=9, steps=[original_step])
+    memory.find_replay.return_value = episode
+
+    orch, action_router, gate, planner, logger = make_orchestrator_with_memory(memory)
+    orch._replanner = replanner
+    gate.request_approval.return_value = GateDecision(verdict="approved", edited_step=edited_step)
+
+    result = orch.run_task("star the repo")
+
+    assert result["status"] == "done"
+    action_router.execute.assert_called_once_with(edited_step)
+    replanner.review_and_learn.assert_called_once_with(
+        "star the repo", original_step, edited_step, memory=memory
+    )
+    memory.record_task.assert_called_once_with("star the repo", result["history"], "done", edited=True)

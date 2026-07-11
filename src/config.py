@@ -18,6 +18,15 @@ class Config:
     gemini_api_key: str
     llm_model: str = "gemini-2.5-flash"
 
+    # Phase 4 (optional): swap-in a cheaper local/fine-tuned planning model
+    # for routine steps instead of the hosted Gemini API. Never replaces the
+    # Brain's safety behavior (risk classification, confirmation gate) --
+    # those live in orchestrator.py/risk_classifier.py, independent of which
+    # planner backend is selected here. See docs/TRD.md §6 and
+    # docs/PHASES.md Phase 4.
+    planner_backend: str = "hosted"  # "hosted" | "local"
+    local_planner_endpoint: str | None = None  # e.g. "http://localhost:11434/api/generate"
+
     # Browser
     default_chrome_profile: str = "Default"
     profiles_dir: Path = field(default_factory=lambda: Path("./profiles"))
@@ -42,8 +51,8 @@ def load(env_path: str | None = None) -> Config:
       GEMINI_API_KEY
 
     Optional env vars:
-      LLM_MODEL, DEFAULT_CHROME_PROFILE, PROFILES_DIR, MAX_STEPS_PER_TASK,
-      LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+      LLM_MODEL, PLANNER_BACKEND, LOCAL_PLANNER_ENDPOINT, DEFAULT_CHROME_PROFILE,
+      PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
     """
     load_dotenv(env_path)
 
@@ -55,9 +64,17 @@ def load(env_path: str | None = None) -> Config:
             "https://aistudio.google.com/apikey"
         )
 
+    planner_backend = os.environ.get("PLANNER_BACKEND", "hosted").strip().lower()
+    if planner_backend not in ("hosted", "local"):
+        raise RuntimeError(
+            f"PLANNER_BACKEND must be 'hosted' or 'local', got {planner_backend!r}."
+        )
+
     cfg = Config(
         gemini_api_key=api_key,
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-flash"),
+        planner_backend=planner_backend,
+        local_planner_endpoint=os.environ.get("LOCAL_PLANNER_ENDPOINT"),
         default_chrome_profile=os.environ.get("DEFAULT_CHROME_PROFILE", "Default"),
         profiles_dir=Path(os.environ.get("PROFILES_DIR", "./profiles")),
         max_steps_per_task=int(os.environ.get("MAX_STEPS_PER_TASK", "40")),

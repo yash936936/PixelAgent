@@ -1,10 +1,16 @@
 """
 Triggered when screen_diff.py shows an action didn't produce the expected
 state; asks the planner for a corrected next step instead of blindly
-continuing. See docs/PHASES.md Part 2.3 (Phase 4 extends this with
-review_and_learn, per docs/CODE_LOGIC.md §11).
+continuing. Phase 4 extends this with review_and_learn: when a user edits a
+proposed confirmation-gate step before approving it, that correction is
+written back to semantic memory (via memory_api.py) so future proposals for
+the same action type start from the corrected version instead of repeating
+the same mistake. See docs/PHASES.md Part 2.3 and the Phase 4 update, and
+docs/CODE_LOGIC.md §11.
 """
 from __future__ import annotations
+
+from typing import Any
 
 from src.brain.planner import PlannerBackend
 
@@ -45,15 +51,38 @@ class Replanner:
         corrected_history = history + [correction_note]
         return self._planner.next_step(instruction, screen_state, corrected_history)
 
-    def review_and_learn(self, failed_or_edited_task: dict, semantic_store=None) -> None:
-        """Phase 4 hook (docs/CODE_LOGIC.md §11) — compares a proposed step to
-        what the user actually approved/edited and writes the correction to
-        semantic memory. No-op until Phase 3's semantic_store.py exists, so
-        this can be called safely from Phase 2 onward without error."""
-        if semantic_store is None:
+    def review_and_learn(
+        self,
+        instruction: str,
+        original_step: dict[str, Any],
+        edited_step: dict[str, Any],
+        memory=None,
+    ) -> None:
+        """Phase 4 hook (docs/CODE_LOGIC.md §11): compares a proposed step to
+        what the user actually approved after editing, and writes the
+        correction to semantic memory so it's available the next time a
+        similar step is proposed. No-op if no memory (MemoryAPI) is
+        supplied, so this can be called safely even when memory is
+        disabled. The namespace is the action type (e.g. "click"), scoped
+        further by the edited step's own target/selector where present, so
+        corrections for different actions never overwrite each other."""
+        if memory is None:
             return
-        if failed_or_edited_task.get("user_edit"):
-            semantic_store.write_fact(
-                subject=failed_or_edited_task.get("task_type", "unknown_task"),
-                fact={"correction": failed_or_edited_task["user_edit"]},
-            )
+        if original_step == edited_step:
+            return
+
+        action = original_step.get("action", "unknown_action")
+        target_key = (
+            original_step.get("params", {}).get("selector")
+            or original_step.get("params", {}).get("url")
+            or "default"
+        )
+        memory.set_site_quirk(
+            f"corrections:{action}",
+            target_key,
+            {
+                "instruction": instruction,
+                "original_step": original_step,
+                "edited_step": edited_step,
+            },
+        )

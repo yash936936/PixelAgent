@@ -33,9 +33,18 @@ class MemoryAPI:
         """Returns a matching past successful task's step plan, or None."""
         return self._episodic.find_match(instruction)
 
-    def record_task(self, instruction: str, history: list[dict[str, Any]], status: str) -> int:
-        """Persists a just-completed task for future replay lookups."""
-        return self._episodic.record(instruction, history, status)
+    def record_task(
+        self, instruction: str, history: list[dict[str, Any]], status: str, edited: bool = False
+    ) -> int:
+        """Persists a just-completed task for future replay lookups. `edited`
+        should be True if the user edited any confirmation-gate approval
+        during the run -- see `flagged_for_review`."""
+        return self._episodic.record(instruction, history, status, edited=edited)
+
+    def flagged_for_review(self):
+        """Phase 4: tasks the self-improvement loop should inspect (failed or
+        user-edited runs)."""
+        return self._episodic.flagged_for_review()
 
     def all_episodes(self):
         return self._episodic.all_episodes()

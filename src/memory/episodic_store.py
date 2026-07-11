@@ -2,7 +2,11 @@
 Episodic memory: persists (instruction, step plan, outcome, timestamp) per
 completed task and provides a lookup for "have I done something like this
 before?" so the orchestrator can attempt a replay before planning fresh.
-See docs/PHASES.md Part 3.1.
+Phase 4 adds a review pass (`flagged_for_review`) that surfaces failed or
+user-edited tasks for the self-improvement loop to inspect -- an `edited`
+flag is recorded per task (set when the user edited any confirmation-gate
+approval during the run) alongside the existing status. See docs/PHASES.md
+Part 3.1 and the Phase 4 episodic_store.py update.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ CREATE TABLE IF NOT EXISTS episodes (
     normalized_instruction TEXT NOT NULL,
     steps_json TEXT NOT NULL,
     status TEXT NOT NULL,
+    edited INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL
 );
 """
@@ -45,6 +50,7 @@ class Episode:
     steps: list[dict[str, Any]]
     status: str
     created_at: float
+    edited: bool = False
 
 
 def _normalize(instruction: str) -> str:
@@ -61,17 +67,21 @@ class EpisodicStore:
         self._conn.execute(_SCHEMA)
         self._conn.commit()
 
-    def record(self, instruction: str, history: list[dict[str, Any]], status: str) -> int:
+    def record(
+        self, instruction: str, history: list[dict[str, Any]], status: str, edited: bool = False
+    ) -> int:
         """Persists a completed task. `history` is the orchestrator's
         step/outcome list; only the `step` half of each entry is kept for
         replay purposes -- outcomes are runtime-specific (e.g. actual
         screenshot bytes/paths) and are re-derived fresh on replay rather
-        than reused."""
+        than reused. `edited` records whether the user edited any
+        confirmation-gate approval during this run, for the Phase 4 review
+        pass -- see `flagged_for_review`."""
         steps = [entry["step"] for entry in history if "step" in entry]
         cur = self._conn.execute(
-            "INSERT INTO episodes (instruction, normalized_instruction, steps_json, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (instruction, _normalize(instruction), json.dumps(steps), status, time.time()),
+            "INSERT INTO episodes (instruction, normalized_instruction, steps_json, status, edited, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (instruction, _normalize(instruction), json.dumps(steps), status, int(edited), time.time()),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -85,12 +95,12 @@ class EpisodicStore:
 
         placeholders = ",".join("?" for _ in _REPLAYABLE_STATUSES)
         rows = self._conn.execute(
-            f"SELECT id, instruction, normalized_instruction, steps_json, status, created_at "
+            f"SELECT id, instruction, normalized_instruction, steps_json, status, edited, created_at "
             f"FROM episodes WHERE status IN ({placeholders}) ORDER BY created_at DESC",
             tuple(_REPLAYABLE_STATUSES),
         ).fetchall()
 
-        for row_id, orig_instruction, norm_instruction, steps_json, status, created_at in rows:
+        for row_id, orig_instruction, norm_instruction, steps_json, status, edited, created_at in rows:
             score = SequenceMatcher(None, normalized, norm_instruction).ratio()
             if score > best_score:
                 best_score = score
@@ -100,6 +110,7 @@ class EpisodicStore:
                     steps=json.loads(steps_json),
                     status=status,
                     created_at=created_at,
+                    edited=bool(edited),
                 )
 
         if best is not None and best_score >= _MATCH_THRESHOLD and best.steps:
@@ -108,10 +119,30 @@ class EpisodicStore:
 
     def all_episodes(self) -> list[Episode]:
         rows = self._conn.execute(
-            "SELECT id, instruction, steps_json, status, created_at FROM episodes ORDER BY created_at DESC"
+            "SELECT id, instruction, steps_json, status, edited, created_at FROM episodes "
+            "ORDER BY created_at DESC"
         ).fetchall()
         return [
-            Episode(id=r[0], instruction=r[1], steps=json.loads(r[2]), status=r[3], created_at=r[4])
+            Episode(id=r[0], instruction=r[1], steps=json.loads(r[2]), status=r[3],
+                    edited=bool(r[4]), created_at=r[5])
+            for r in rows
+        ]
+
+    def flagged_for_review(self) -> list[Episode]:
+        """Phase 4 review pass: returns every task that either didn't finish
+        cleanly (status != "done") or was completed only after the user
+        edited a proposed step -- exactly the tasks the self-improvement
+        loop should inspect for a correction worth remembering. See
+        docs/PHASES.md Phase 4 ("Adds a review pass that flags failed/edited
+        tasks for the improvement loop to inspect")."""
+        rows = self._conn.execute(
+            "SELECT id, instruction, steps_json, status, edited, created_at FROM episodes "
+            "WHERE status != ? OR edited = 1 ORDER BY created_at DESC",
+            ("done",),
+        ).fetchall()
+        return [
+            Episode(id=r[0], instruction=r[1], steps=json.loads(r[2]), status=r[3],
+                    edited=bool(r[4]), created_at=r[5])
             for r in rows
         ]
 

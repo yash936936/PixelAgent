@@ -30,21 +30,34 @@ def test_correct_raises_when_retries_exhausted():
     planner.next_step.assert_not_called()
 
 
-def test_review_and_learn_noop_without_semantic_store():
+def test_review_and_learn_noop_without_memory():
     replanner = Replanner(planner=MagicMock())
-    # Should not raise even though semantic_store is None (Phase 3 dependency
-    # doesn't exist yet).
-    replanner.review_and_learn({"user_edit": "changed selector"}, semantic_store=None)
+    # Should not raise even though memory is None (memory disabled at runtime).
+    original = {"action": "click", "params": {"selector": "#star"}}
+    edited = {"action": "click", "params": {"selector": "#star-alt"}}
+    replanner.review_and_learn("star the repo", original, edited, memory=None)
 
 
-def test_review_and_learn_writes_fact_when_store_present():
+def test_review_and_learn_noop_when_step_unchanged():
     replanner = Replanner(planner=MagicMock())
-    semantic_store = MagicMock()
+    memory = MagicMock()
+    step = {"action": "click", "params": {"selector": "#star"}}
 
-    replanner.review_and_learn(
-        {"task_type": "star_repo", "user_edit": "used different repo"}, semantic_store=semantic_store
-    )
+    replanner.review_and_learn("star the repo", step, step, memory=memory)
 
-    semantic_store.write_fact.assert_called_once_with(
-        subject="star_repo", fact={"correction": "used different repo"}
+    memory.set_site_quirk.assert_not_called()
+
+
+def test_review_and_learn_writes_correction_when_step_edited():
+    replanner = Replanner(planner=MagicMock())
+    memory = MagicMock()
+    original = {"action": "click", "params": {"selector": "#star"}}
+    edited = {"action": "click", "params": {"selector": "#star-alt"}}
+
+    replanner.review_and_learn("star the repo", original, edited, memory=memory)
+
+    memory.set_site_quirk.assert_called_once_with(
+        "corrections:click",
+        "#star",
+        {"instruction": "star the repo", "original_step": original, "edited_step": edited},
     )

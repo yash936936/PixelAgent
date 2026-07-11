@@ -87,7 +87,47 @@ made by adding a new dated entry, not editing old ones.
   interface — no further signature changes anticipated for those two files in Phase 3 per `PHASES.md` Part
   3.1's description (only `episodic_store.py` lookups get added around the existing loop).
 
-### [2026-07-11] Phase 3 implemented (both parts: episodic + semantic memory)
+### [2026-07-11] Phase 4 implemented (self-improvement loop + research routing + loop audit accuracy)
+- **Type:** New file (multiple) + overwrite (multiple)
+- **File(s) affected:** `src/brain/research_router.py` (new), `src/brain/replanner.py` (updated),
+  `src/memory/episodic_store.py` (updated), `src/memory/memory_api.py` (updated),
+  `src/brain/orchestrator.py` (updated), `src/observability/logger.py` (updated),
+  `src/brain/planner.py` (updated), `src/config.py` (updated), `src/main.py` (updated),
+  `.env.example` (updated), plus `tests/brain/test_research_router.py`, `tests/brain/test_planner.py`,
+  `tests/test_config.py`, and updates to `tests/brain/test_replanner.py` and
+  `tests/brain/test_orchestrator_replay.py`.
+- **What changed:**
+  - `research_router.py`: new `ResearchTool` interface (`WebSearchTool`, `GitHubApiTool`) plus
+    `ResearchRouter` that registers tools and routes a query to the first one whose `handles(platform)`
+    matches, with a `doctor()` health-check per tool. No cookie-based login automation included, per
+    `context.md`'s hard boundaries.
+  - `replanner.py`: `review_and_learn()` rewritten to take `(instruction, original_step, edited_step,
+    memory)` and write the correction to semantic memory via `MemoryAPI.set_site_quirk()` under a
+    `corrections:<action>` namespace, keyed by the step's selector/url — a no-op if `memory` is `None` or
+    the step wasn't actually edited.
+  - `episodic_store.py` / `memory_api.py`: episodes now carry an `edited` flag (set when the user edited
+    any confirmation-gate approval during that run); `flagged_for_review()` surfaces every task that either
+    failed or was edited, for the self-improvement loop to inspect.
+  - `orchestrator.py`: on any confirmation-gate edit (in both the fresh-planning loop and the Phase-3
+    replay loop), calls `replanner.review_and_learn()` and marks the task `edited=True` when recording it
+    to memory. Replay-executed steps are now logged with `llm_call=False` (added a `log_event()` on
+    `Logger` for meta/marker records like "replay started" so they don't inflate `LoopAudit.step_count`
+    either) — this is what makes the "fewer LLM calls on repeat tasks" success criterion from Phases 3/4
+    actually visible in the trace log's audit summary.
+  - `planner.py`: added `LocalPlanner` (optional local/fine-tuned model swap-in behind the same
+    `PlannerBackend` interface, via an injected `generate_fn`) and `build_http_generate_fn()` (a stdlib-only
+    HTTP transport helper for a local model server); extracted shared response parsing into `_parse_step()`
+    so both backends validate identically.
+  - `config.py` / `.env.example` / `main.py`: added `PLANNER_BACKEND` (`hosted` | `local`) and
+    `LOCAL_PLANNER_ENDPOINT` config options; `main.py`'s new `_build_planner()` picks the backend — this
+    never changes risk classification or confirmation gating, only where a proposed step comes from, per
+    `docs/TRD.md §6`.
+- **Why:** User requested Phase 4 implementation, part by part, with a deliverable zip.
+- **Impacts:** `docs/STATUS.md` updated to mark all Phase 4 files Complete and bump overall progress to
+  Phase 4. Full test suite re-run clean: 97/97 passing (75 from Phases 1-3 plus 22 new Phase 4 tests).
+  `docs/PHASES.md`'s Phase 5 (`risk_classifier.py` rule-table expansion from real usage logs, plus
+  `trace_replay.py`) is now the only remaining phase before hardening.
+
 - **Type:** New file (multiple) + overwrite
 - **File(s) affected:** `src/memory/episodic_store.py` (new), `src/memory/semantic_store.py` (new),
   `src/memory/memory_api.py` (new), `src/brain/orchestrator.py` (updated), `src/main.py` (updated), plus

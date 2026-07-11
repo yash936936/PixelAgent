@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from google import genai
 from google.genai import types
@@ -72,16 +72,75 @@ class HostedLLMPlanner(PlannerBackend):
             ),
         )
         raw_text = (response.text or "").strip()
+        return _parse_step(raw_text)
 
-        try:
-            step = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Planner returned non-JSON output, cannot proceed safely: {raw_text!r}"
-            ) from exc
 
-        for required in ("action", "description", "target_type", "params"):
-            if required not in step:
-                raise ValueError(f"Planner step missing required field '{required}': {step}")
+class LocalPlanner(PlannerBackend):
+    """Phase 4 (optional): swaps in a cheaper, locally-hosted fine-tuned
+    model for routine steps instead of the hosted Gemini API, behind the
+    same PlannerBackend interface -- so orchestrator.py, risk_classifier.py,
+    and gate.py need zero changes regardless of which backend is
+    configured. This never replaces the Brain's safety behavior: it only
+    changes where the *proposed* step comes from, not whether it gets
+    risk-classified and gated (see docs/TRD.md §6).
 
-        return step
+    `generate_fn(system_prompt, user_content) -> str` is injected so this
+    class has no hard dependency on any specific local-serving stack (e.g.
+    Ollama, LM Studio, a raw HTTP endpoint) -- callers wire up the actual
+    transport in src/main.py based on config.py's `local_planner_endpoint`.
+    """
+
+    def __init__(self, generate_fn: Callable[[str, str], str]) -> None:
+        self._generate_fn = generate_fn
+
+    def next_step(
+        self, instruction: str, screen_state: dict[str, Any], history: list[dict]
+    ) -> dict[str, Any]:
+        user_content = json.dumps(
+            {
+                "instruction": instruction,
+                "current_state": screen_state,
+                "steps_so_far": history,
+            }
+        )
+        raw_text = self._generate_fn(SYSTEM_PROMPT, user_content).strip()
+        return _parse_step(raw_text)
+
+
+def _parse_step(raw_text: str) -> dict[str, Any]:
+    """Shared response parsing/validation for every PlannerBackend
+    implementation, so HostedLLMPlanner and LocalPlanner can never drift on
+    what counts as a valid step."""
+    try:
+        step = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Planner returned non-JSON output, cannot proceed safely: {raw_text!r}"
+        ) from exc
+
+    for required in ("action", "description", "target_type", "params"):
+        if required not in step:
+            raise ValueError(f"Planner step missing required field '{required}': {step}")
+
+    return step
+
+
+def build_http_generate_fn(endpoint: str) -> Callable[[str, str], str]:
+    """Convenience helper for wiring LocalPlanner to a plain HTTP JSON
+    endpoint (e.g. an Ollama-style `/api/generate` route) without adding a
+    new third-party HTTP dependency -- uses the stdlib `urllib` only. The
+    endpoint is expected to accept {"system": ..., "prompt": ...} and return
+    JSON with a top-level "response" string field; adapt this helper if
+    your local server uses a different contract."""
+    import urllib.request
+
+    def _generate(system_prompt: str, user_content: str) -> str:
+        payload = json.dumps({"system": system_prompt, "prompt": user_content}).encode("utf-8")
+        request = urllib.request.Request(
+            endpoint, data=payload, headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return body["response"]
+
+    return _generate
