@@ -37,6 +37,14 @@ made by adding a new dated entry, not editing old ones.
   matching the user's requirement to handle "any task I can perform on the laptop."
 - **Impacts:** `PHASES.md` Phase 1/2 split (browser-first, then desktop pixel control).
 
+### [2026-07-09] Excluded certification/exam auto-completion
+- **Type:** Scope change
+- **File(s) affected:** `context.md`, `docs/TRD.md`
+- **What changed:** Removed "complete certification courses for me" from the feature set entirely.
+- **Why:** Autonomous completion of graded coursework/exams misrepresents who actually earned the
+  credential — this is credential fraud regardless of framing.
+- **Impacts:** No repo mapped to this feature; excluded permanently per `TRD.md §6` hard boundaries.
+
 ### [2026-07-09] Excluded signup/verification bypass (FckSignups) and de-safetied model (G0DM0D3)
 - **Type:** Scope change
 - **File(s) affected:** `context.md`, `docs/TRD.md`
@@ -55,6 +63,40 @@ made by adding a new dated entry, not editing old ones.
 - **Why:** Explicit user choice.
 - **Impacts:** `TRD.md §5` risk classification table; `src/confirmation/gate.py` design in `PHASES.md` Part
   1.4.
+
+### [2026-07-11] LLM backend swapped: Anthropic -> Gemini (free-tier)
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `requirements.txt`, `.env.example`, `src/config.py`, `src/brain/planner.py`,
+  `src/main.py`, `docs/TRD.md §2`
+- **What changed:** `HostedLLMPlanner` now calls the Gemini API via the current `google-genai` SDK
+  (`google.genai.Client`), not Anthropic's API. `Config.anthropic_api_key` renamed to `gemini_api_key`;
+  `.env.example` now expects `GEMINI_API_KEY`; default model changed to `gemini-2.5-flash`. Also caught and
+  avoided a real bug during this change: the first pass used the now-deprecated `google-generativeai`
+  package, which raised a `FutureWarning` on import during re-verification — switched to the current
+  `google-genai` package before finalizing.
+- **Why:** User asked whether a free Claude API key exists — it doesn't (no persistent free tier on
+  Anthropic's API); Gemini has a genuine free tier via Google AI Studio, so the user asked to swap the
+  hosted planner backend to Gemini across every relevant file.
+- **Impacts:** `PlannerBackend` interface (docs/CODE_LOGIC.md §4) is unchanged — this swap only touches the
+  `HostedLLMPlanner` implementation, so Phase 4's local-model backend and the orchestrator/router/gate
+  layers required no changes. Re-ran the full Phase 1 test suite (16/16 passing) and a clean import check
+  after the swap; see `docs/DEBUG.md` for the entry.
+
+### [2026-07-11] Phase 1 implemented (all 5 parts)
+- **Type:** New file (multiple)
+- **File(s) affected:** `requirements.txt`, `.env.example`, `src/config.py`, `src/brain/risk_classifier.py`,
+  `src/brain/planner.py`, `src/brain/orchestrator.py`, `src/action/playwright_driver.py`,
+  `src/action/action_router.py`, `src/confirmation/gate.py`, `src/confirmation/prompt_ui.py`,
+  `src/observability/logger.py`, `src/main.py`, plus `tests/brain/test_risk_classifier.py`,
+  `tests/action/test_action_router.py`, `tests/confirmation/test_gate.py`, and `__init__.py` package files.
+- **What changed:** Implemented every file listed in `PHASES.md` Parts 1.1–1.5. One deviation from the
+  original `PHASES.md` description: `orchestrator.py` routes execution through `ActionRouter` rather than
+  calling `PlaywrightDriver` directly, to match `TRD.md §3.4`'s routing requirement and keep Phase 2's
+  desktop-control branch a clean addition to `ActionRouter` instead of a rewrite of `orchestrator.py`.
+- **Why:** User requested Phase 1 implementation, part by part, with a deliverable zip.
+- **Impacts:** `docs/STATUS.md` updated to reflect all Phase 1 files as Complete; `docs/DEBUG.md` gained a
+  real debug-pass entry (see that file); Phase 2 can now build directly on `ActionRouter`'s existing `web`
+  branch by adding a `desktop` branch, per `PHASES.md` Part 2.2.
 
 ### [2026-07-09] Reviewed all 19 reference repos, created docs/CODE_LOGIC.md
 - **Type:** New file

@@ -1,0 +1,22 @@
+# Secrets / environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Playwright / Chrome profiles (contain real logged-in sessions — never commit)
+profiles/
+
+# Logs / traces / screenshots
+logs/
+*.png
+*.jpg
+
+# OS cruft
+.DS_Store
+Thumbs.db

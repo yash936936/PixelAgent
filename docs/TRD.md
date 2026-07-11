@@ -8,7 +8,7 @@ the debug pass (`DEBUG.md`) checks the codebase against.
 - OS: Windows 10/11 desktop
 - Runtime: local process, single user, no multi-tenant/cloud requirement for v1
 - Browser automation: Chromium/Chrome via Playwright
-- LLM: hosted API (Claude) for the Brain by default; local fine-tuned model is an optional Phase 4 swap-in
+- LLM: hosted API (Gemini, free-tier eligible) for the Brain by default; local fine-tuned model is an optional Phase 4 swap-in
 
 ## 3. Subsystems and functional requirements
 

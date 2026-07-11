@@ -61,9 +61,45 @@ Append to the bottom of this file after each pass:
 
 ## Debug Notes log
 
-### [2026-07-09] Documentation set only — no code to debug yet
-- Files checked: n/a (Phase 0, docs only)
-- Issues found: none (no source code exists)
-- Issues NOT fixed: n/a
-- Tests run: n/a
-- Result: N/A — first real debug pass occurs after Phase 1, Part 1.1 files are written.
+### [2026-07-11] Debug pass — Phase 1 complete
+- Files checked: all 12 `src/` files created in Phase 1 (`config.py`, `brain/risk_classifier.py`,
+  `brain/planner.py`, `brain/orchestrator.py`, `action/playwright_driver.py`, `action/action_router.py`,
+  `confirmation/gate.py`, `confirmation/prompt_ui.py`, `observability/logger.py`, `main.py`) plus 3 test
+  files.
+- Issues found:
+  1. `brain/orchestrator.py` — originally called `PlaywrightDriver` methods directly in `_execute()`,
+     bypassing `ActionRouter` entirely (contradicted `TRD.md §3.4`'s routing requirement and would have
+     made Phase 2's desktop-control branch require rewriting `orchestrator.py` instead of just
+     `action_router.py`) — fixed by adding an `ActionRouter` param to `Orchestrator.__init__` and routing
+     `_execute()` through it.
+  2. `confirmation/gate.py` — initial version would have let a Destructive step through as approved even
+     without the re-typed "CONFIRM" phrase if the prompt callable itself said "approved" — fixed by adding
+     an explicit phrase check inside `request_approval()` so this can't be bypassed by a buggy or malicious
+     `prompt_fn` implementation; added `test_destructive_requires_confirm_phrase` to lock this in.
+  3. `action/action_router.py` importing `playwright_driver.py` required the `playwright` pip package to be
+     installed even for router unit tests that mock the driver — confirmed intentional (import-time
+     dependency), not a bug, but noted here since it's a real environment requirement, not just a "nice to
+     have."
+- Issues NOT fixed (external blockers): live end-to-end run against a real Chrome profile and real
+  `ANTHROPIC_API_KEY` — requires `playwright install chromium` and real credentials, which live on the
+  user's machine, not this build environment.
+- Tests run: `pip install -r requirements.txt` (partial — chromium browser binary not installed, not needed
+  for unit tests); `python -m pytest tests/ -v` — 16/16 passed; `python -c "import ..."` smoke-import of
+  every Phase 1 module — all imported cleanly.
+- Result: **Pass** for everything testable in this environment. Live browser + real LLM call still needs to
+  be verified by the user before calling Phase 1 fully done per `PHASES.md`'s success criterion.
+
+### [2026-07-11] Debug pass — Anthropic to Gemini swap
+- Files checked: `requirements.txt`, `.env.example`, `src/config.py`, `src/brain/planner.py`, `src/main.py`
+- Issues found:
+  1. First implementation used `google-generativeai` (the deprecated package) — surfaced as a
+     `FutureWarning` during the re-verification import check, not a silent issue. Fixed by switching to the
+     current `google-genai` package (`google.genai.Client` + `google.genai.types.GenerateContentConfig`)
+     and updating `requirements.txt` accordingly.
+- Issues NOT fixed (external blockers): live call to the real Gemini API not verified in this environment —
+  needs a real `GEMINI_API_KEY` on the user's machine.
+- Tests run: `python -c "import ..."` clean-import check (no warnings) on all touched modules;
+  `python -m pytest tests/ -q` — 16/16 passed (unaffected by the LLM backend swap since tests mock/avoid the
+  planner's network call).
+- Result: **Pass.**
+

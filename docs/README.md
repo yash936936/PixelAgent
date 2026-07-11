@@ -10,6 +10,7 @@ steps, executes them (via fast structured automation where possible, raw pixel c
 to approve any external/irreversible step, and remembers how it did the task so repeats are faster.
 
 ## What it deliberately does not do
+- Complete graded coursework, exams, or certifications on your behalf
 - Bypass CAPTCHAs, bot-detection, or signup/verification systems on other services
 
 See `docs/DECISIONS.md` for why, and `../context.md` for the full project map.
