@@ -51,6 +51,13 @@ class Episode:
     status: str
     created_at: float
     edited: bool = False
+    # Fix for a gap flagged in review: replay was previously an all-or-
+    # nothing decision below _MATCH_THRESHOLD with the actual similarity
+    # score thrown away, so nothing in the trace log could ever show how
+    # confident a given replay was -- a borderline 0.83 match and a
+    # near-exact 0.99 match were indistinguishable after the fact. Now
+    # carried through so orchestrator.py can log it.
+    match_score: float = 0.0
 
 
 def _normalize(instruction: str) -> str:
@@ -111,6 +118,7 @@ class EpisodicStore:
                     status=status,
                     created_at=created_at,
                     edited=bool(edited),
+                    match_score=score,
                 )
 
         if best is not None and best_score >= _MATCH_THRESHOLD and best.steps:

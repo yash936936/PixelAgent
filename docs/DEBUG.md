@@ -166,3 +166,37 @@ Append to the bottom of this file after each pass:
   risk cases observed in a full regression pass over logged tasks" criterion still needs a real corpus of
   logged tasks from live use to fully verify — `unclassified_or_missing_risk()` on `TraceReplay` is the
   tool for the user to run that check once such logs exist.
+### [2026-07-12] Gap-remediation debug pass
+- Files reviewed and modified: `boundary_guard.py` (new), `risk_llm_judge.py` (new),
+  `risk_classifier.py`, `orchestrator.py`, `planner.py`, `gate.py`, `prompt_ui.py`,
+  `playwright_driver.py`, `logger.py`, `episodic_store.py`, `main.py`, `requirements.txt`.
+- Issues found and fixed during this pass (beyond the ones described in `docs/DECISIONS.md`'s entry for
+  the same date):
+  1. First implementation of `_check_boundary()`/`_classify_risk()` insertion into `orchestrator.py`
+     accidentally clobbered the body of the pre-existing `_observe()` method via an imprecise
+     `str_replace` — caught immediately by the full test suite (`AttributeError: 'Orchestrator' object
+     has no attribute '_observe'`), fixed by restoring the method body.
+  2. `BoundaryBlocked` was originally only caught inside `_execute_and_verify`'s try/except, but
+     `_check_boundary()` is actually called *before* that try block (ahead of gating) — the exception
+     would have propagated uncaught and crashed the task instead of cleanly halting it. Moved the
+     try/except to wrap the actual call site.
+  3. `_capture_verification_screenshot()`'s new logging of "verification_unavailable" was initially
+     unconditional, which would have spammed an event into every single step's trace even in
+     Phase-1-only configurations with no replanner configured (i.e., verification intentionally not
+     requested). Gated screenshot capture (and therefore its logging) behind `self._replanner is not
+     None`, matching the existing `_can_verify` gating logic.
+  4. A test boundary-guard phrase ("bypass the verification check") matched two categories
+     simultaneously by coincidence, making the test's assertion of a single expected `Boundary` value
+     fragile; reworded to an unambiguous phrase from the intended category only.
+  5. First draft of `HostedLLMPlanner._generate_fn` duplicated the request-building logic already in
+     `next_step()` slightly differently; confirmed via test that both paths produce identical Gemini API
+     calls before finalizing, to avoid two subtly different code paths hitting the same API.
+- Tests run: `python -m pytest -q` — 165/165 passed (121 pre-existing, unmodified in behavior, + 44 new:
+  boundary guard 7, LLM risk-judge 6, orchestrator wiring 3, gate context 3, prompt_ui 4, logger
+  redaction 7, planner cost 4, main.py wiring 2, episodic match_score 2, risk_classifier confidence 3,
+  plus incidental additions).
+- Result: **Pass.** Every concretely-identified, code-level gap from the review has either been fixed
+  and tested, or is called out explicitly in `docs/STATUS.md`'s Known Gaps section as something this
+  remediation pass could not fully close (see that section for the honest remainder — mainly things that
+  require a live environment, a product-level redesign, or are fundamentally unbounded, like a
+  keyword-based boundary guard's exposure to sufficiently novel phrasing).

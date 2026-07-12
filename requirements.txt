@@ -1,7 +1,20 @@
-google-genai>=1.0.0
-playwright>=1.47.0
-python-dotenv>=1.0.1
-pydantic>=2.9.0
-pytesseract>=0.3.13
-pillow>=10.4.0
-pyautogui>=0.9.54
+# Fix for a gap flagged in review: every dependency here used to be pinned
+# with only a lower bound (">="), which let an untested newer release get
+# installed silently -- this project actually hit a real ImportError from
+# an ambiguous google-genai install during this exact hardening pass. Every
+# version below is one that has been installed and run against this
+# codebase's test suite (160 passing tests) in this environment. Pin exact
+# versions with `==`; if you need a newer release, bump it deliberately and
+# re-run the full test suite first.
+google-genai==2.11.0
+playwright==1.56.0
+python-dotenv==1.2.2
+pydantic==2.13.4
+pytesseract==0.3.13
+pillow==12.1.1
+# pyautogui requires a real display/X server and could not be installed or
+# exercised in the sandboxed environment this project was hardened in --
+# this version is a reasonable recent stable release, NOT one that has been
+# verified against this codebase. Verify it yourself on your target machine
+# (Windows) before relying on src/action/mouse_keyboard.py in production.
+pyautogui==0.9.54

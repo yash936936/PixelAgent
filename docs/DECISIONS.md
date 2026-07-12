@@ -236,3 +236,60 @@ made by adding a new dated entry, not editing old ones.
   success criterion ("no unclassified/misclassified risk cases observed in a full regression pass"). No
   hard boundary or existing Phase 1-4 behavior was changed — all 97 pre-existing tests still pass
   unmodified, plus 24 new tests (121 total).
+
+### [2026-07-12] Gap-remediation pass: fixes for every issue raised in independent review
+- **Type:** Overwrite (multiple existing files) + New files
+- **File(s) affected:**
+  - `src/brain/boundary_guard.py` (NEW) — deterministic, non-negotiable hard-boundary check
+    (graded-coursework submission, CAPTCHA/bot-detection bypass, signup-verification bypass) that
+    runs before risk classification on every step and cannot be gated/edited around.
+  - `src/brain/risk_llm_judge.py` (NEW) — actually implements the LLM risk-judge fallback that
+    `risk_classifier.py`'s docstring had described since Phase 1 but that was never wired anywhere.
+  - `src/brain/risk_classifier.py` — added `classify_with_confidence()` so callers can tell a real
+    keyword match apart from an unmatched default, which is what the LLM fallback needs to know when
+    to engage.
+  - `src/brain/orchestrator.py` — wires `_check_boundary()` and `_classify_risk()` (keyword + optional
+    LLM second opinion) into both the fresh-planning loop and the replay loop; fixed the verification
+    screenshot scratch path to come from `config.py`'s `log_dir` instead of a hardcoded `"./logs/..."`
+    string; verification failures are now logged via `log_event()` instead of silently swallowed;
+    added `_gate_context()` so the confirmation prompt can actually show a screenshot path and account
+    profile; added `_planner_cost()` so `LoopAudit.est_cost` reflects a real number instead of always
+    `0.0`.
+  - `src/brain/planner.py` — `HostedLLMPlanner` now reads real token usage off the Gemini response and
+    estimates a real per-call cost (`estimate_cost_usd`), and exposes a raw `_generate_fn` transport so
+    `risk_llm_judge.py` can reuse it without a second LLM client.
+  - `src/confirmation/gate.py` / `src/confirmation/prompt_ui.py` — `GateContext` (screenshot path,
+    account/profile) is now actually threaded through and displayed, matching what `docs/PHASES.md`
+    Part 1.4 always specified but no prior implementation of `prompt_fn`'s signature could have shown.
+  - `src/action/playwright_driver.py` — added a `profile_name` property so there's something for
+    `GateContext.account_profile` to actually read.
+  - `src/observability/logger.py` — added `_redact_step()`, applied in `log_step`/`log_gate_decision`/
+    `log_event`, masking any params value whose key looks like a credential (password, secret, token,
+    api_key, ssn, credit-card, cvv, etc.) before it's ever written to the plaintext `.jsonl` trace —
+    directly implements the "no plaintext storage of user credentials" requirement in `docs/TRD.md §4`,
+    which nothing previously enforced.
+  - `src/memory/episodic_store.py` — `Episode` now carries `match_score`, and `orchestrator.py` logs it
+    on every replay attempt, so replay confidence is now auditable from the trace instead of being an
+    opaque yes/no decision.
+  - `requirements.txt` — every dependency pinned to an exact version that has actually been installed
+    and run against this test suite in this environment (was previously all lower-bound-only `>=`,
+    which caused a real `ImportError` from an ambiguous `google-genai` install during this very pass).
+  - `src/main.py` — wires `log_dir` and a `llm_risk_judge` (built from whichever planner backend is
+    configured) into `Orchestrator`.
+  - New/expanded tests: `tests/brain/test_boundary_guard.py`, `tests/brain/test_risk_llm_judge.py`,
+    `tests/observability/test_logger.py`, `tests/confirmation/test_prompt_ui.py`, `tests/test_main.py`,
+    plus additions to `test_risk_classifier.py`, `test_orchestrator.py`, `test_gate.py`,
+    `test_planner.py`, `test_episodic_store.py`.
+- **Why:** Directly addresses every concrete gap raised in an independent line-by-line review of the
+  codebase: (1) the promised LLM risk-fallback never existing, (2) hard boundaries being enforced only
+  by hoping the LLM planner refused, (3) `prompt_ui.py` never actually showing the screenshot/profile
+  context the docs always claimed it showed, (4) `LoopAudit.est_cost` always being `0.0`, (5) a
+  hardcoded screenshot path bypassing `config.py`, (6) verification failures being silently swallowed
+  with zero trace, (7) credentials being written to plaintext logs with no redaction, (8) unpinned
+  dependencies risking exactly the kind of install drift this project hit firsthand, and (9) episodic
+  replay's match confidence being thrown away instead of logged.
+- **Impacts:** 165 tests passing (up from 121; 44 new, all previously-passing tests still green and
+  unmodified in behavior). See `docs/DEBUG.md` for the debug pass covering this remediation, and
+  `docs/STATUS.md`'s Known Gaps section for what remains honestly unresolved (live validation, full
+  screenshot/log encryption at rest, multi-user/concurrency, and the inherent limits of a keyword-based
+  boundary guard against sufficiently novel phrasing or prompt injection).

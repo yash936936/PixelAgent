@@ -4,6 +4,15 @@ NEXT SINGLE step, not a full up-front plan — so the Brain can react to actual
 state rather than committing to a stale plan. See docs/CODE_LOGIC.md §4 for the
 PlannerBackend interface this follows (Phase 4 will add a local-model backend
 behind the same interface).
+
+Fix for a gap flagged in review: LoopAudit.est_cost (observability/logger.py)
+was tracked as a real field but nothing anywhere ever computed a real cost --
+every call site passed the default 0.0, so "estimated cost per task" was
+always zero regardless of how many LLM calls a task made. HostedLLMPlanner
+now reads real input/output token counts off the Gemini response's
+usage_metadata and estimates a dollar cost from them, exposed via
+`last_call_cost`/`last_call_tokens` so orchestrator.py can pass a real
+number to logger.log_step() instead of the previous always-0.0 default.
 """
 from __future__ import annotations
 
@@ -30,10 +39,30 @@ Respond with ONLY a JSON object, no other text, matching this schema:
 If the task is already complete, respond with {"action": "done", "description": "...", "target_type": "web", "params": {}}.
 Never invent a step that isn't necessary for the instruction. Keep each step minimal and concrete."""
 
+# Approximate per-1M-token USD pricing used only for observability/cost
+# estimation (docs/TRD.md §3.1's max-step budget is about step count, this
+# is a supplementary signal, not a billing-accurate figure). Deliberately
+# conservative/rough -- update here if Gemini pricing changes, in one place
+# rather than scattered per call site.
+_COST_PER_1M_INPUT_TOKENS_USD = 0.075
+_COST_PER_1M_OUTPUT_TOKENS_USD = 0.30
+
+
+def estimate_cost_usd(input_tokens: int, output_tokens: int) -> float:
+    return (
+        input_tokens / 1_000_000 * _COST_PER_1M_INPUT_TOKENS_USD
+        + output_tokens / 1_000_000 * _COST_PER_1M_OUTPUT_TOKENS_USD
+    )
+
 
 class PlannerBackend(ABC):
     """Interface every planner implementation follows, so the Brain never
     depends on a specific backend. See docs/CODE_LOGIC.md §4."""
+
+    #: Real cost of the most recent next_step() call, in USD, or 0.0 if
+    #: unknown/not applicable (e.g. LocalPlanner has no meaningful notion of
+    #: dollar cost, so it stays 0.0 rather than fabricating a number).
+    last_call_cost: float = 0.0
 
     @abstractmethod
     def next_step(
@@ -51,6 +80,26 @@ class HostedLLMPlanner(PlannerBackend):
     def __init__(self, api_key: str, model: str) -> None:
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        self.last_call_cost: float = 0.0
+
+    def _generate_fn(self, system_prompt: str, user_content: str) -> str:
+        """Exposes the raw (system_prompt, user_content) -> text transport
+        this planner already wraps, in the same shape LocalPlanner's
+        injected generate_fn takes. This is what lets main.py build an LLM
+        risk-judge fallback (risk_llm_judge.py) that works identically
+        regardless of which PlannerBackend is configured, without a second
+        LLM client (fix for the gap flagged in review: the LLM risk-judge
+        fallback never existed in the first place, partly because there
+        was no reusable raw-generate transport to build it on)."""
+        response = self._client.models.generate_content(
+            model=self._model,
+            contents=user_content,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                response_mime_type="application/json",
+            ),
+        )
+        return (response.text or "").strip()
 
     def next_step(
         self, instruction: str, screen_state: dict[str, Any], history: list[dict]
@@ -71,8 +120,23 @@ class HostedLLMPlanner(PlannerBackend):
                 response_mime_type="application/json",
             ),
         )
+        self.last_call_cost = self._estimate_cost_from_response(response)
         raw_text = (response.text or "").strip()
         return _parse_step(raw_text)
+
+    def _estimate_cost_from_response(self, response) -> float:
+        """Reads real token counts off the Gemini response when available;
+        falls back to 0.0 (not a guess) if usage_metadata is missing, since
+        an approximate character-count guess presented as a "cost" would be
+        more misleading than an honest zero. This directly fixes the gap
+        where est_cost was unconditionally 0.0 for every task regardless of
+        real usage."""
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return 0.0
+        input_tokens = getattr(usage, "prompt_token_count", None) or 0
+        output_tokens = getattr(usage, "candidates_token_count", None) or 0
+        return estimate_cost_usd(input_tokens, output_tokens)
 
 
 class LocalPlanner(PlannerBackend):

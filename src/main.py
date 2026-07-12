@@ -14,11 +14,30 @@ from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
 from src.brain.planner import HostedLLMPlanner, LocalPlanner, build_http_generate_fn
 from src.brain.replanner import Replanner
+from src.brain.risk_llm_judge import build_llm_risk_judge
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger
 from src.perception.ocr import OCREngine
+
+
+def _build_llm_risk_judge(planner):
+    """Fix for a gap flagged in review: this fallback previously didn't
+    exist at all despite risk_classifier.py's docstring long promising it.
+    Reuses whichever planner backend is already configured (hosted Gemini
+    or a local endpoint) so no second LLM client/config is needed --
+    HostedLLMPlanner and LocalPlanner both already expose a
+    generate/next_step path; here we just need a raw (system, user) ->
+    text callable, so we go one level lower than next_step() and reuse the
+    same transport LocalPlanner already wraps for hosted vs local. If the
+    planner doesn't expose that transport, risk judging simply falls back
+    to keyword-only classification (identical to every prior phase's
+    behavior) rather than failing startup."""
+    generate_fn = getattr(planner, "_generate_fn", None)
+    if generate_fn is None:
+        return None
+    return build_llm_risk_judge(generate_fn)
 
 
 def _build_desktop_backends():
@@ -76,6 +95,8 @@ def main(instruction: str) -> dict:
             mouse_keyboard=mouse_keyboard,
             replanner=replanner,
             memory=memory,
+            log_dir=cfg.log_dir,
+            llm_risk_judge=_build_llm_risk_judge(planner),
         )
         result = orchestrator.run_task(instruction)
 

@@ -61,3 +61,19 @@ def test_all_episodes_includes_non_replayable(store):
     store.record("task b", [], "error")
     episodes = store.all_episodes()
     assert len(episodes) == 2
+
+
+def test_find_match_reports_match_score(store):
+    steps = [{"action": "navigate", "description": "go", "target_type": "web", "params": {}}]
+    store.record("open github and star the repo", _history(steps), "done")
+    match = store.find_match("open github and star the repo")
+    assert match is not None
+    assert match.match_score == pytest.approx(1.0)
+
+
+def test_find_match_score_reflects_partial_similarity(store):
+    steps = [{"action": "navigate", "description": "go", "target_type": "web", "params": {}}]
+    store.record("open github.com and click star", _history(steps), "done")
+    match = store.find_match("open github.com and click the star button")
+    assert match is not None
+    assert 0.82 <= match.match_score < 1.0

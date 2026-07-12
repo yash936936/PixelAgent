@@ -75,13 +75,23 @@ class RiskClassifier:
     def classify(self, step: dict) -> Risk:
         """step is expected to have at least 'action' and optionally
         'description' string fields describing what the step will do."""
+        risk, _confident = self.classify_with_confidence(step)
+        return risk
+
+    def classify_with_confidence(self, step: dict) -> tuple[Risk, bool]:
+        """Like classify(), but also reports whether a keyword actually
+        matched (True) versus the result being the unmatched default of
+        Local (False -- "confident" here means "confident there's nothing
+        concerning," which is exactly the case that's cheapest to get wrong
+        silently). This is what fixes the gap where classify() always
+        returned a definite-looking answer even for text that matched
+        nothing -- callers (see orchestrator.py) can now route the
+        low-confidence case to an LLM judge instead of trusting an
+        unmatched default at face value."""
         text = f"{step.get('action', '')} {step.get('description', '')}".lower()
 
         if not text.strip():
-            # No information to classify on — fail safe to the most cautious
-            # class rather than silently defaulting to Local. See docs/DEBUG.md
-            # "Special checks by subsystem" for why this must never happen.
-            return Risk.EXTERNAL
+            return Risk.EXTERNAL, True
 
         is_read_only_framed = any(guard in text for guard in _READ_ONLY_GUARDS)
 
@@ -89,15 +99,15 @@ class RiskClassifier:
             if kw in text:
                 if is_read_only_framed and not _has_actual_verb(text, kw):
                     continue
-                return Risk.DESTRUCTIVE
+                return Risk.DESTRUCTIVE, True
 
         for kw in _EXTERNAL_KEYWORDS:
             if kw in text:
                 if is_read_only_framed and not _has_actual_verb(text, kw):
                     continue
-                return Risk.EXTERNAL
+                return Risk.EXTERNAL, True
 
-        return Risk.LOCAL
+        return Risk.LOCAL, False
 
     def needs_confirmation(self, risk: Risk) -> bool:
         return risk in (Risk.EXTERNAL, Risk.DESTRUCTIVE)

@@ -65,6 +65,39 @@ binary).**
   warrant retuning both. `LocalPlanner`/`build_http_generate_fn` are wired in but untested against a real
   local model server (no such server available in this build environment).
 
+## Known gaps (honest remainder after the 2026-07-12 remediation pass)
+This project underwent an independent line-by-line gap review, and every concretely fixable issue found
+was fixed and tested (see `docs/DECISIONS.md` and `docs/DEBUG.md` entries dated 2026-07-12). What's
+listed below is what remains, stated plainly rather than glossed over:
+
+- **Zero live validation, still.** Every one of the 165 passing tests runs against mocks. No real
+  Playwright browser, real Tesseract OCR, real mouse/keyboard, or real Gemini call has ever executed in
+  this project's history. OCR accuracy, click-coordinate precision, `screen_diff.py`'s real-world false-
+  positive/negative rate, and basic timing/race conditions are all genuinely unknown until run on real
+  hardware.
+- **The hard-boundary guard (`boundary_guard.py`) is still keyword/phrase-based**, same class of
+  mechanism as `risk_classifier.py`. It is a real, independent, non-gateable second layer now (a
+  meaningful improvement over relying on the planner LLM's own judgment alone), but it is not a
+  guarantee — sufficiently novel phrasing, or a prompt-injection attack crafted specifically against its
+  known phrase list, could still slip through. Closing this completely would require a fundamentally
+  different mechanism (e.g. a dedicated classifier model), which is out of scope for this pass.
+- **Screenshots and logs are still unencrypted at rest.** Credential-shaped `params` values are now
+  redacted before being written (fixed this pass), but full-frame screenshots can still contain
+  arbitrary on-screen sensitive content (open messages, visible form fields, etc.), and there is no
+  retention policy or encryption-at-rest for the `logs/` directory. This is a larger, deliberate
+  design/infra decision (key management, where to store keys, etc.) that wasn't attempted here.
+- **No multi-user / concurrency model.** Single process, single browser profile, one task at a time,
+  by design — not addressed in this pass.
+- **The "no de-safetied base model" boundary is enforced by review process, not runtime code** — see
+  `boundary_guard.py`'s own docstring, which says this honestly rather than pretending to check
+  something a keyword scan over step text structurally cannot see (which model is configured is a
+  property of `config.py`, not of any individual step).
+- **The LLM risk-judge fallback (`risk_llm_judge.py`) adds a real second opinion, but it costs an extra
+  LLM call for every step the keyword filter finds no signal on**, and its own judgment is still an LLM
+  call subject to the same general LLM failure modes (it fails safe to "no opinion" on any error, but a
+  confidently wrong "local" verdict from the judge is not distinguishable from a correct one without
+  human review of the trace).
+
 ## Next action
 User to install the Tesseract OCR binary (Windows:
 https://github.com/UB-Mannheim/tesseract/wiki), run `pip install -r requirements.txt && playwright install
@@ -76,10 +109,12 @@ accumulated logged tasks looking for misclassified risk cases and feed any misse
 `risk_classifier.py`'s keyword tables (with a new `DECISIONS.md` entry per change).
 
 ---
-**Last updated:** 2026-07-11 (Phase 5 implemented: `risk_classifier.py` rule table expanded — Destructive
-keywords: format/wipe drives, clear history, account deletion, subscription cancellation, branch/repo
-deletion, hard reset, etc.; External keywords: DMs/invites, issue/PR actions, bookings/orders, account
-linking/authorization, etc. — plus a read-only-guard check to avoid overclassifying steps that only
-inspect a sensitive element; `trace_replay.py` created (new, Part 5) with forward/backward/jump stepping,
-gate-decision and missing-risk queries, screenshot listing, and a minimal CLI; 121 tests passing total,
-24 new for Phase 5)
+**Last updated:** 2026-07-12 (Gap-remediation pass: added `boundary_guard.py` (new, deterministic
+non-gateable hard-boundary check) and `risk_llm_judge.py` (new, the LLM risk-fallback that was previously
+only a docstring promise); fixed `est_cost` always being `0.0`; fixed a hardcoded verification-screenshot
+path bypassing `config.py`; fixed verification failures being silently swallowed with zero trace; fixed
+`prompt_ui.py` never actually displaying screenshot path/account profile despite the docs always
+specifying it should; added credential redaction to every log-writing path in `logger.py`; pinned every
+dependency in `requirements.txt` to an exact tested version; surfaced episodic replay's match-confidence
+score into the trace log instead of discarding it. 165 tests passing total, 44 new. See "Known gaps"
+above for what honestly remains.)

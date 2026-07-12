@@ -39,6 +39,14 @@ class PlaywrightDriver:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._page.screenshot(path=path)
 
+    @property
+    def profile_name(self) -> str:
+        """Fix for a gap flagged in review: gate.py/prompt_ui.py always
+        claimed to show the target account/profile, but nothing exposed it
+        anywhere -- this is what main.py/orchestrator.py now read to build
+        that GateContext field."""
+        return self._profile_name
+
     def current_url(self) -> str:
         return self._page.url
 

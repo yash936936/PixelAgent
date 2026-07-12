@@ -113,3 +113,29 @@ def test_review_document_not_misclassified_external():
     rc = RiskClassifier()
     step = {"action": "read", "description": "Review the document contents"}
     assert rc.classify(step) == Risk.LOCAL
+
+
+# --- classify_with_confidence() ------------------------------------------
+
+def test_confidence_true_on_keyword_match():
+    rc = RiskClassifier()
+    step = {"action": "click", "description": "Delete the file"}
+    risk, confident = rc.classify_with_confidence(step)
+    assert risk == Risk.DESTRUCTIVE
+    assert confident is True
+
+
+def test_confidence_false_on_unmatched_text():
+    rc = RiskClassifier()
+    step = {"action": "scroll", "description": "Scroll down the page"}
+    risk, confident = rc.classify_with_confidence(step)
+    assert risk == Risk.LOCAL
+    assert confident is False
+
+
+def test_confidence_true_on_empty_text_fail_safe():
+    rc = RiskClassifier()
+    step = {"action": "", "description": ""}
+    risk, confident = rc.classify_with_confidence(step)
+    assert risk == Risk.EXTERNAL
+    assert confident is True
