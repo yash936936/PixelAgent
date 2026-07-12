@@ -12,9 +12,9 @@ from src.action.action_router import ActionRouter
 from src.action.mouse_keyboard import MouseKeyboard
 from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
-from src.brain.planner import HostedLLMPlanner, LocalPlanner, build_http_generate_fn
+from src.brain.planner import HostedLLMPlanner, LocalFineTunedPlanner, build_http_generate_fn
 from src.brain.replanner import Replanner
-from src.brain.risk_llm_judge import build_llm_risk_judge
+from src.brain.risk_model_backend import HostedRiskJudge, LocalFineTunedRiskModel
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.memory.memory_api import MemoryAPI
@@ -22,22 +22,40 @@ from src.observability.logger import Logger
 from src.perception.ocr import OCREngine
 
 
-def _build_llm_risk_judge(planner):
-    """Fix for a gap flagged in review: this fallback previously didn't
-    exist at all despite risk_classifier.py's docstring long promising it.
-    Reuses whichever planner backend is already configured (hosted Gemini
-    or a local endpoint) so no second LLM client/config is needed --
-    HostedLLMPlanner and LocalPlanner both already expose a
-    generate/next_step path; here we just need a raw (system, user) ->
-    text callable, so we go one level lower than next_step() and reuse the
-    same transport LocalPlanner already wraps for hosted vs local. If the
-    planner doesn't expose that transport, risk judging simply falls back
-    to keyword-only classification (identical to every prior phase's
-    behavior) rather than failing startup."""
-    generate_fn = getattr(planner, "_generate_fn", None)
-    if generate_fn is None:
+def _build_risk_model_judge(cfg):
+    """Track B (docs/DECISIONS.md 2026-07-12): builds the SEPARATE
+    risk/boundary judgment model, independent of _build_planner() below --
+    deliberately not reusing the planner's transport, so the two models can
+    be swapped/rolled back independently (see risk_model_backend.py's
+    docstring and config.py's risk_model_backend/local_risk_model_endpoint
+    fields).
+
+    Defaults to returning None (risk_model_backend="none") -- i.e.
+    risk_classifier.py's keyword floor + boundary_guard.py remain the ONLY
+    risk signal unless a trained/hosted risk model is explicitly enabled.
+    This default is deliberate: enabling "local" here is a deployment
+    decision that requires the eval/adversarial_boundary_eval.py gate to
+    have been run and passed first (see eval/README.md) -- main.py cannot
+    verify that gate was actually run, so it does not try to; it only
+    keeps the safer default until a human opts in."""
+    if cfg.risk_model_backend == "none":
         return None
-    return build_llm_risk_judge(generate_fn)
+
+    if cfg.risk_model_backend == "hosted":
+        generate_fn = HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)._generate_fn
+        return HostedRiskJudge(generate_fn=generate_fn).judge
+
+    if cfg.risk_model_backend == "local":
+        if not cfg.local_risk_model_endpoint:
+            raise RuntimeError(
+                "RISK_MODEL_BACKEND=local requires LOCAL_RISK_MODEL_ENDPOINT to be set in .env. "
+                "Before enabling this, run eval/adversarial_boundary_eval.py against the model "
+                "and confirm it clears the recall threshold in eval/README.md."
+            )
+        generate_fn = build_http_generate_fn(cfg.local_risk_model_endpoint)
+        return LocalFineTunedRiskModel(generate_fn=generate_fn).judge
+
+    return None
 
 
 def _build_desktop_backends():
@@ -56,18 +74,18 @@ def _build_desktop_backends():
 
 
 def _build_planner(cfg):
-    """Phase 4 (optional): PLANNER_BACKEND=local swaps in a cheaper
-    locally-hosted model for routine steps instead of the hosted Gemini
-    API, behind the same PlannerBackend interface -- risk classification
-    and confirmation gating in orchestrator.py are unaffected either way.
-    See docs/TRD.md §6 and docs/PHASES.md Phase 4."""
+    """Track B (docs/DECISIONS.md 2026-07-12): PLANNER_BACKEND=local swaps
+    in a LoRA-fine-tuned local model for routine steps instead of the
+    hosted Gemini API, behind the same PlannerBackend interface -- risk
+    classification and confirmation gating in orchestrator.py are
+    unaffected either way. See docs/TRD.md §6 and training/README.md."""
     if cfg.planner_backend == "local":
         if not cfg.local_planner_endpoint:
             raise RuntimeError(
                 "PLANNER_BACKEND=local requires LOCAL_PLANNER_ENDPOINT to be set in .env."
             )
         generate_fn = build_http_generate_fn(cfg.local_planner_endpoint)
-        return LocalPlanner(generate_fn=generate_fn)
+        return LocalFineTunedPlanner(generate_fn=generate_fn)
     return HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
 
 
@@ -96,7 +114,7 @@ def main(instruction: str) -> dict:
             replanner=replanner,
             memory=memory,
             log_dir=cfg.log_dir,
-            llm_risk_judge=_build_llm_risk_judge(planner),
+            llm_risk_judge=_build_risk_model_judge(cfg),
         )
         result = orchestrator.run_task(instruction)
 

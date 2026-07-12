@@ -293,3 +293,61 @@ made by adding a new dated entry, not editing old ones.
   `docs/STATUS.md`'s Known Gaps section for what remains honestly unresolved (live validation, full
   screenshot/log encryption at rest, multi-user/concurrency, and the inherent limits of a keyword-based
   boundary guard against sufficiently novel phrasing or prompt injection).
+
+### [2026-07-12] Track B: two separate trained-model interfaces + mandatory eval gate + training scaffold
+- **Type:** New files + overwrites
+- **File(s) affected:**
+  - `src/brain/risk_model_backend.py` (NEW) — `RiskModelBackend` interface, deliberately NOT sharing a
+    class hierarchy with `PlannerBackend`, with `HostedRiskJudge` and `LocalFineTunedRiskModel`
+    implementations. Additive-only by construction: can escalate Local -> External/Destructive, can
+    never downgrade a keyword match, never overrides `boundary_guard.py`.
+  - `src/brain/planner.py` — renamed `LocalPlanner` to `LocalFineTunedPlanner` (matching the name
+    `docs/CODE_LOGIC.md §4` used from the start), kept `LocalPlanner` as a backward-compat alias.
+  - `src/config.py` — added `risk_model_backend` ("none"|"hosted"|"local", default `"none"`) and
+    `local_risk_model_endpoint`, deliberately separate config keys from `planner_backend`/
+    `local_planner_endpoint` so the two models can be swapped/rolled back independently.
+  - `src/main.py` — replaced the old `_build_llm_risk_judge()` (which derived a risk judge from
+    whichever planner happened to be configured) with `_build_risk_model_judge(cfg)`, which builds a
+    genuinely separate model from its own config block. Defaults to `None` (keyword-only floor) unless
+    explicitly enabled.
+  - `eval/adversarial_cases.jsonl` (NEW) — 30 curated adversarial/evasive-phrasing test cases across 4
+    categories: `evasive_destructive`, `evasive_external`, `boundary_evasion`, `benign_but_tricky`.
+  - `eval/adversarial_boundary_eval.py` (NEW) — the harness itself. Scores the current keyword-only
+    baseline (`boundary_guard.py` + `risk_classifier.py`) and, optionally, a `RiskModelBackend` layered
+    on top, exactly the way `orchestrator.py`'s `_classify_risk()` actually does it. Reports
+    **per-category recall**, not just overall accuracy, deliberately, since averaging would hide a low
+    recall on the highest-stakes category behind higher scores elsewhere.
+  - `eval/README.md` (NEW) — documents proposed deployment-gate thresholds (recall ≥ 0.95 for
+    `evasive_destructive`/`boundary_evasion`, ≥ 0.90 for the other two categories) and states plainly
+    that these are a starting proposal needing human sign-off, not an external standard.
+  - `training/` (NEW directory) — `README.md` (two-separate-runs overview + recommended base models:
+    Qwen2.5-3B/7B-Instruct or Llama-3.2-3B-Instruct), `prepare_dataset.py` (converts eval cases +
+    real episodic-store data into instruction-tuning jsonl for either target), `train_lora.py` (LoRA
+    fine-tuning script, heavy deps deferred via lazy imports so the module still imports cleanly
+    without them installed), `model_card_template.md` (the auditability record required by
+    `docs/TRD.md §6.1`), `requirements-training.txt` (kept separate from the main `requirements.txt`
+    on purpose — training deps are heavyweight and machine-specific).
+  - `docs/TRD.md` — added §6.1 making trained-model provenance auditable via the model card + eval gate
+    rather than merely asserted.
+  - New/updated tests: `tests/brain/test_risk_model_backend.py`, `tests/eval/test_adversarial_boundary_eval.py`,
+    `tests/training/test_prepare_dataset.py`, `tests/training/test_train_lora.py`, `tests/test_main.py`
+    (rewritten for the new config-driven builder).
+- **Why:** Implements the two-model architecture requested: a lower-stakes planner model and a
+  higher-stakes risk/boundary model, kept as genuinely separate classes/configs/training runs rather
+  than one model doing double duty, plus the eval harness built and run BEFORE any deployment decision
+  rather than after.
+- **Notable finding during this pass:** running the freshly-built eval harness against the existing
+  read-only-guard logic in `risk_classifier.py` immediately caught a real bug — `_has_actual_verb()` was
+  checking the combined `"{action} {description}"` text, and the `action` field itself (e.g. `"click"`)
+  is one of the verbs the check looks for, so the guard silently passed for every step routed as
+  `action="click"` regardless of what its description said. Fixed to check the description text alone,
+  and to scan every occurrence of a keyword rather than just the first (a second bug the fix's first
+  iteration introduced and the harness caught again immediately). This is exactly the kind of gap this
+  harness exists to surface — see `docs/DEBUG.md`'s entry for this date for the full trace of both fixes.
+- **Impacts:** 189 tests passing (up from 165; 24 new). The eval harness's baseline run against the
+  keyword-only floor scores ~40% overall accuracy with single-digit-to-mid per-category recall on
+  `evasive_destructive` and `boundary_evasion` specifically — this is the expected, honest starting
+  point that justifies training a risk model in the first place, documented in `eval/README.md` rather
+  than glossed over. `risk_model_backend` defaults to `"none"` — nothing about this pass changes
+  runtime behavior unless a human explicitly opts in via `.env`, and doing so before the eval gate is
+  cleared is a documented misuse of the config, not something the code can prevent by itself.

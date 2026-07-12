@@ -139,23 +139,38 @@ class HostedLLMPlanner(PlannerBackend):
         return estimate_cost_usd(input_tokens, output_tokens)
 
 
-class LocalPlanner(PlannerBackend):
-    """Phase 4 (optional): swaps in a cheaper, locally-hosted fine-tuned
-    model for routine steps instead of the hosted Gemini API, behind the
-    same PlannerBackend interface -- so orchestrator.py, risk_classifier.py,
-    and gate.py need zero changes regardless of which backend is
-    configured. This never replaces the Brain's safety behavior: it only
-    changes where the *proposed* step comes from, not whether it gets
-    risk-classified and gated (see docs/TRD.md §6).
+class LocalFineTunedPlanner(PlannerBackend):
+    """Track B (per docs/DECISIONS.md's 2026-07-12 model-training entry):
+    a locally-hosted, LoRA-fine-tuned open-weights model swapped in behind
+    the same PlannerBackend interface as HostedLLMPlanner -- so
+    orchestrator.py, risk_classifier.py, boundary_guard.py, and gate.py need
+    ZERO changes regardless of which backend is configured. This is the
+    class docs/CODE_LOGIC.md §4 named `LocalFineTunedPlanner` from the
+    start ("Phase 4 optional swap-in, trained per OpenManus-style pipeline,
+    same interface").
+
+    This class only ever changes where the *proposed next step* comes
+    from -- it never changes whether that step gets risk-classified and
+    gated. A bug or a bad fine-tune here can make Pixel propose a worse
+    step, but structurally cannot make it skip risk_classifier.py's or
+    boundary_guard.py's checks, since those run in orchestrator.py
+    regardless of planner backend. This is the deliberate design boundary
+    from TRD.md §6: the planner is allowed to be experimental, the safety
+    layer underneath it is not.
 
     `generate_fn(system_prompt, user_content) -> str` is injected so this
     class has no hard dependency on any specific local-serving stack (e.g.
-    Ollama, LM Studio, a raw HTTP endpoint) -- callers wire up the actual
-    transport in src/main.py based on config.py's `local_planner_endpoint`.
+    a raw HTTP call to a vLLM/text-generation-inference server hosting the
+    fine-tuned LoRA adapter) -- callers wire up the actual transport in
+    src/main.py based on config.py's `local_planner_endpoint`. See
+    training/README.md for how the underlying model is actually trained,
+    and training/model_card_template.md for the auditability record TRD.md
+    §6 requires before this class is ever pointed at a new base model.
     """
 
     def __init__(self, generate_fn: Callable[[str, str], str]) -> None:
         self._generate_fn = generate_fn
+        self.last_call_cost: float = 0.0  # local inference: no per-call $ cost to track
 
     def next_step(
         self, instruction: str, screen_state: dict[str, Any], history: list[dict]
@@ -171,10 +186,16 @@ class LocalPlanner(PlannerBackend):
         return _parse_step(raw_text)
 
 
+# Backward-compat alias: this class was previously named LocalPlanner. Kept
+# so any existing import (including main.py before this rename, and any
+# external code) keeps working without modification.
+LocalPlanner = LocalFineTunedPlanner
+
+
 def _parse_step(raw_text: str) -> dict[str, Any]:
     """Shared response parsing/validation for every PlannerBackend
-    implementation, so HostedLLMPlanner and LocalPlanner can never drift on
-    what counts as a valid step."""
+    implementation, so HostedLLMPlanner and LocalFineTunedPlanner can never
+    drift on what counts as a valid step."""
     try:
         step = json.loads(raw_text)
     except json.JSONDecodeError as exc:

@@ -42,6 +42,13 @@ python src/main.py "your instruction here"
 - Run with `pytest` before considering any phase complete
 - At minimum: unit tests for `risk_classifier.py` (every risk class correctly identified) and
   `action_router.py` (correct routing between Playwright and pixel control)
+- `eval/` (added 2026-07-12) is separate from `tests/` — it's an adversarial evaluation harness, not a
+  correctness unit-test suite. Run `python -m eval.adversarial_boundary_eval` whenever
+  `risk_classifier.py` or `boundary_guard.py` changes, and always before enabling a trained risk model
+  (`RISK_MODEL_BACKEND=local`). See `eval/README.md`.
+- `training/` (added 2026-07-12) holds the LoRA fine-tuning pipeline for Track B's two separate models
+  (planner, risk model). Its own heavyweight deps live in `training/requirements-training.txt`, kept out
+  of the main `requirements.txt` on purpose. See `training/README.md`.
 
 ## 7. Debug pass
 Run the full protocol in `docs/DEBUG.md` any time the codebase is updated — not just at the end of a phase.

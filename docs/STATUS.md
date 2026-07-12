@@ -98,23 +98,51 @@ listed below is what remains, stated plainly rather than glossed over:
   confidently wrong "local" verdict from the judge is not distinguishable from a correct one without
   human review of the trace).
 
+## Track B: trained-model architecture (new, 2026-07-12)
+Two SEPARATE trained-model interfaces now exist, both currently disabled by default (no runtime
+behavior change until a human explicitly opts in via `.env`):
+
+| File | Status |
+|---|---|
+| `src/brain/planner.py`'s `LocalFineTunedPlanner` | Interface + wiring complete; no model trained yet |
+| `src/brain/risk_model_backend.py`'s `LocalFineTunedRiskModel` | Interface + wiring complete; no model trained yet |
+| `eval/adversarial_boundary_eval.py` + `eval/adversarial_cases.jsonl` | Complete, tested, already caught 2 real bugs in `risk_classifier.py` on first run |
+| `training/prepare_dataset.py` | Complete, tested, runs today (real data is empty/tiny until live usage exists) |
+| `training/train_lora.py` | Complete, correct, NOT runnable in this sandbox (no GPU) — ready for a real training machine |
+| `training/model_card_template.md` | Template ready; no model card filled out yet (no model trained yet) |
+
+**Current keyword-only baseline eval score** (`python -m eval.adversarial_boundary_eval`): ~40% overall
+accuracy, with `evasive_destructive` and `boundary_evasion` recall in the 14% range specifically. This is
+the expected, honest starting point — see `eval/README.md`'s "Known baseline gaps" section — and is the
+actual justification for training `LocalFineTunedRiskModel`, not a problem to solve by adding more
+keywords to `risk_classifier.py`.
+
+**Nothing may be set to `RISK_MODEL_BACKEND=local` in a live `.env` until:**
+1. A real model has actually been trained (`training/train_lora.py` run on real hardware with real data).
+2. `eval/adversarial_boundary_eval.py --model local` clears the thresholds in `eval/README.md`.
+3. `training/model_card_template.md` is filled out and committed.
+4. A `docs/DECISIONS.md` entry records the decision, per `docs/TRD.md §6.1`.
+
 ## Next action
-User to install the Tesseract OCR binary (Windows:
-https://github.com/UB-Mannheim/tesseract/wiki), run `pip install -r requirements.txt && playwright install
-chromium`, and exercise the full live loop (Phases 1-5), including running a real task end to end to
-generate a real `logs/task_*.jsonl` trace, then pointing `python -m src.observability.trace_replay` at it
-(or the `logs/` dir) to confirm live-trace replay and check for any `unclassified_or_missing_risk()` gaps
-that only real usage would surface. Per Phase 5's success criterion, run a full regression pass over
-accumulated logged tasks looking for misclassified risk cases and feed any misses back into
-`risk_classifier.py`'s keyword tables (with a new `DECISIONS.md` entry per change).
+1. **Still outstanding from Phase 5 (unchanged by this pass):** run the system live end to end to
+   generate real `logs/task_*.jsonl` traces — this remains the single biggest unblocking step for
+   almost everything else in this project, including Track B's training data.
+2. **Track B specifically:** once real logs exist, mine corrections out of them via
+   `trace_replay.py`'s `unclassified_or_missing_risk()`, feed them into
+   `training/prepare_dataset.py --target risk_model`, and run `training/train_lora.py` on a real GPU
+   machine. Do the same for the planner once enough successful (`status="done"`) episodes exist in
+   `memory/episodic_store.py`'s database. Run the eval gate before enabling either trained backend in a
+   live `.env`, and fill out a model card per `training/model_card_template.md` for each.
 
 ---
-**Last updated:** 2026-07-12 (Gap-remediation pass: added `boundary_guard.py` (new, deterministic
-non-gateable hard-boundary check) and `risk_llm_judge.py` (new, the LLM risk-fallback that was previously
-only a docstring promise); fixed `est_cost` always being `0.0`; fixed a hardcoded verification-screenshot
-path bypassing `config.py`; fixed verification failures being silently swallowed with zero trace; fixed
-`prompt_ui.py` never actually displaying screenshot path/account profile despite the docs always
-specifying it should; added credential redaction to every log-writing path in `logger.py`; pinned every
-dependency in `requirements.txt` to an exact tested version; surfaced episodic replay's match-confidence
-score into the trace log instead of discarding it. 165 tests passing total, 44 new. See "Known gaps"
-above for what honestly remains.)
+**Last updated:** 2026-07-12 (Track B added: `risk_model_backend.py` (new, a genuinely separate
+`RiskModelBackend` interface from `PlannerBackend`, additive-only over the keyword floor); `LocalPlanner`
+renamed to `LocalFineTunedPlanner` (backward-compat alias kept); `config.py` gained independent
+`risk_model_backend`/`local_risk_model_endpoint` fields so the two models can be swapped/rolled back
+separately; built and ran `eval/adversarial_boundary_eval.py` + `eval/adversarial_cases.jsonl`, which
+immediately caught two real bugs in `risk_classifier.py`'s read-only-guard logic (both fixed); added
+`training/` scaffold (`prepare_dataset.py`, `train_lora.py`, `model_card_template.md`,
+`requirements-training.txt`) for the two separate LoRA fine-tuning runs; added `docs/TRD.md §6.1` making
+trained-model provenance auditable via the model card + eval gate. 189 tests passing total, 24 new. See
+"Track B" section above for exactly what is and isn't done, and "Known gaps" further above for what
+remains from the prior pass.)

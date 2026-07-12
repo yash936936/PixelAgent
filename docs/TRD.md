@@ -58,5 +58,20 @@ the debug pass (`DEBUG.md`) checks the codebase against.
 - No bypassing CAPTCHA/bot-detection/signup-verification systems on third-party services
 - Brain MUST run on a model with intact safety training — no "de-safetied" base model swap
 
+### 6.1 Trained-model auditability (added 2026-07-12, Track B)
+Any locally-trained model wired into this project — `LocalFineTunedPlanner` or
+`LocalFineTunedRiskModel` (`src/brain/planner.py` / `src/brain/risk_model_backend.py`) — MUST have
+a completed `training/model_card_template.md` committed before its corresponding config value
+(`planner_backend=local` / `risk_model_backend=local`) is ever set in a live `.env`. The model card
+is what makes this section's "no de-safetied base model" requirement checkable after the fact,
+rather than a claim nobody can verify. `risk_model_backend=local` additionally requires
+`eval/adversarial_boundary_eval.py` to clear the per-category recall thresholds in `eval/README.md`
+— see that file for the actual numbers and the reasoning behind measuring per-category recall
+rather than overall accuracy. Neither trained model is ever permitted to replace
+`risk_classifier.py`'s keyword floor or `boundary_guard.py`'s hard-boundary check — both remain
+mandatory, unconditional checks in `orchestrator.py` regardless of which planner or risk-model
+backend is configured; a trained risk model can only ever escalate a step's classification, never
+downgrade one (see `src/brain/risk_model_backend.py`'s module docstring).
+
 ## 7. Acceptance criteria by phase
 See `PHASES.md` — each phase lists its own success criterion and the files it introduces or modifies.

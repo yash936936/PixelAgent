@@ -200,3 +200,47 @@ Append to the bottom of this file after each pass:
   remediation pass could not fully close (see that section for the honest remainder — mainly things that
   require a live environment, a product-level redesign, or are fundamentally unbounded, like a
   keyword-based boundary guard's exposure to sufficiently novel phrasing).
+### [2026-07-12] Track B eval-harness build + bug caught on first run
+- Files reviewed/modified: `risk_model_backend.py` (new), `planner.py` (rename), `config.py`, `main.py`,
+  `eval/adversarial_boundary_eval.py` (new), `eval/adversarial_cases.jsonl` (new), `risk_classifier.py`,
+  `training/*` (new).
+- Issues found and fixed during this pass:
+  1. **Real bug, caught by the eval harness on its very first run, not by unit tests.** The read-only
+     guard's `_has_actual_verb()` checked the combined `"{step['action']} {step['description']}"` text
+     for a preceding action verb (`click`/`press`/`tap`/`hit`/`select`). Since `step['action']` is itself
+     almost always one of those verbs (e.g. `"click"`), and it's always prepended first, the check
+     trivially passed for every `action="click"` step regardless of description — silently defeating the
+     read-only guard for the single most common action type. Existing unit tests didn't catch this
+     because they all happened to construct cases where the description's own wording lined up with the
+     desired result by coincidence. Fixed by checking `step['description']` alone.
+  2. That fix introduced a second, narrower bug the harness caught on the very next run: case `adv_021`
+     ("check if the delete button works, then click delete") regressed to `local`, because
+     `_has_actual_verb()` used `text.find(keyword)` (first occurrence only) — "delete" appears twice in
+     that description, and the first occurrence ("delete button") has no preceding verb, so the function
+     returned `False` and never checked the second occurrence ("click delete"). Fixed by scanning every
+     occurrence of the keyword in the description, not just the first.
+  3. Confirmed the eval harness's `_predict_with_model()` path (keyword + optional model layer) exactly
+     mirrors `orchestrator.py`'s real `_classify_risk()` logic line-for-line, including the
+     boundary-guard-first ordering and the escalate-only constraint — added
+     `test_model_layer_never_overrides_a_boundary_violation` and
+     `test_model_layer_never_downgrades_a_confident_keyword_match` specifically to lock this in, since a
+     harness that scores a different code path than production would give a false sense of security.
+  4. Adjusted two adversarial dataset entries (`adv_023` "cancel my subscription", `adv_024` "empty out
+     the recycle bin") after discovering they were meant to test evasive phrasing but happened to expose
+     a separate, smaller keyword-substring-matching gap (an inserted word breaking the exact-phrase
+     match) rather than genuine semantic evasion — kept them in the dataset as legitimate baseline gaps,
+     documented explicitly in `eval/README.md`'s "Known baseline gaps" section rather than either quietly
+     fixing them with a keyword patch (re-entering the unbounded-list problem) or silently dropping them.
+- Tests run: `python -m pytest -q` — 189/189 passed (165 pre-existing, unmodified in behavior, + 24 new:
+  risk_model_backend 6, eval harness 7, prepare_dataset 5, train_lora 3, test_main.py rewritten 4 tests
+  for the new config-driven builder). Also ran
+  `python -m eval.adversarial_boundary_eval` directly (not just via pytest) to confirm the CLI report
+  output is readable and correctly flags per-category recall, and
+  `python -m training.prepare_dataset --target risk_model/--target planner` to confirm both actually run
+  end-to-end and report honestly on the current (near-empty) real-data situation rather than silently
+  producing something that looks more complete than it is.
+- Result: **Pass.** The harness itself is now real, tested, and already proved its worth by catching two
+  genuine bugs before any trained model was ever involved. The keyword-only baseline's actual eval score
+  (~40% overall, low per-category recall on the two highest-stakes categories) is recorded honestly in
+  `eval/README.md` as the justification for Track B's risk model, not something to chase to 100% with
+  more keywords.

@@ -1,0 +1,18 @@
+# Heavyweight, training-only dependencies -- deliberately NOT in the
+# project's main requirements.txt (see training/train_lora.py's docstring).
+# Install these only on the machine you actually train on.
+#
+# Versions are intentionally left as lower-bounds here (unlike the main
+# requirements.txt, which was hardened to exact pins after this project hit
+# a real unpinned-install failure) -- CUDA/GPU driver compatibility varies
+# too much per machine to responsibly pin exact versions without knowing
+# your hardware. Pin these yourself once you've confirmed a working
+# combination on your training machine, and record the exact versions in
+# training/model_card_template.md.
+torch>=2.3.0
+transformers>=4.44.0
+peft>=0.12.0
+bitsandbytes>=0.43.0
+accelerate>=0.33.0
+datasets>=2.20.0
+trl>=0.9.0

@@ -89,6 +89,7 @@ class RiskClassifier:
         low-confidence case to an LLM judge instead of trusting an
         unmatched default at face value."""
         text = f"{step.get('action', '')} {step.get('description', '')}".lower()
+        description_text = str(step.get("description", "")).lower()
 
         if not text.strip():
             return Risk.EXTERNAL, True
@@ -97,13 +98,13 @@ class RiskClassifier:
 
         for kw in _DESTRUCTIVE_KEYWORDS:
             if kw in text:
-                if is_read_only_framed and not _has_actual_verb(text, kw):
+                if is_read_only_framed and not _has_actual_verb(description_text, kw):
                     continue
                 return Risk.DESTRUCTIVE, True
 
         for kw in _EXTERNAL_KEYWORDS:
             if kw in text:
-                if is_read_only_framed and not _has_actual_verb(text, kw):
+                if is_read_only_framed and not _has_actual_verb(description_text, kw):
                     continue
                 return Risk.EXTERNAL, True
 
@@ -115,15 +116,40 @@ class RiskClassifier:
 
 def _has_actual_verb(text: str, keyword: str) -> bool:
     """Very conservative check: if the keyword is immediately preceded by an
-    imperative-style action verb ("click", "press", "tap", "hit"), treat it
-    as a real action even inside a read-only-guarded sentence, so phrasing
-    like "check if the delete button works, then click delete" still
-    escalates correctly. Defaults to True (i.e. still classify as risky)
-    whenever this can't confidently tell — the guard only suppresses false
-    positives it is sure about."""
+    imperative-style action verb ("click", "press", "tap", "hit") WITHIN THE
+    DESCRIPTION TEXT ONLY, treat it as a real action even inside a
+    read-only-guarded sentence, so phrasing like "check if the delete
+    button works, then click delete" still escalates correctly.
+
+    Fix for a bug the adversarial eval harness caught on day one
+    (eval/adversarial_boundary_eval.py, case adv_016): this used to be
+    checked against the combined "{action} {description}" text, and every
+    step's `action` field (e.g. "click") is itself one of these verbs --
+    so a step routed as action="click" always satisfied this check
+    regardless of what its description actually said, silently defeating
+    the read-only guard for the single most common action type. Now takes
+    only the description text, so the routing action field can never
+    substitute for an actual verb appearing in the step's own description.
+
+    Defaults to True (i.e. still classify as risky) whenever this can't
+    confidently tell -- the guard only suppresses false positives it is
+    sure about."""
     action_verbs = ("click", "press", "tap", "hit", "select")
-    idx = text.find(keyword)
-    if idx == -1:
-        return True
-    prefix = text[:idx]
-    return any(verb in prefix for verb in action_verbs)
+
+    start = 0
+    found_any = False
+    while True:
+        idx = text.find(keyword, start)
+        if idx == -1:
+            break
+        found_any = True
+        prefix = text[:idx]
+        if any(verb in prefix for verb in action_verbs):
+            return True
+        start = idx + 1
+
+    # No occurrence of the keyword had a preceding verb in the description.
+    # If the keyword never appeared at all (shouldn't happen given the
+    # caller already matched it against the combined text, but stay safe),
+    # default to True rather than silently suppressing.
+    return not found_any

@@ -27,6 +27,18 @@ class Config:
     planner_backend: str = "hosted"  # "hosted" | "local"
     local_planner_endpoint: str | None = None  # e.g. "http://localhost:11434/api/generate"
 
+    # Track B (docs/DECISIONS.md 2026-07-12): a SEPARATE, independently
+    # trained/versioned/rolled-back model for risk/boundary judgment,
+    # additive on top of risk_classifier.py's keyword floor and
+    # boundary_guard.py's hard-boundary check -- never a replacement for
+    # either. Deliberately its own config block, distinct from
+    # planner_backend/local_planner_endpoint above, so the two models can be
+    # swapped independently (see src/brain/risk_model_backend.py's
+    # docstring for the full rationale, and eval/README.md for the
+    # mandatory eval-gate before enabling this in production).
+    risk_model_backend: str = "none"  # "none" | "hosted" | "local"
+    local_risk_model_endpoint: str | None = None  # e.g. "http://localhost:11435/api/generate"
+
     # Browser
     default_chrome_profile: str = "Default"
     profiles_dir: Path = field(default_factory=lambda: Path("./profiles"))
@@ -51,7 +63,8 @@ def load(env_path: str | None = None) -> Config:
       GEMINI_API_KEY
 
     Optional env vars:
-      LLM_MODEL, PLANNER_BACKEND, LOCAL_PLANNER_ENDPOINT, DEFAULT_CHROME_PROFILE,
+      LLM_MODEL, PLANNER_BACKEND, LOCAL_PLANNER_ENDPOINT, RISK_MODEL_BACKEND,
+      LOCAL_RISK_MODEL_ENDPOINT, DEFAULT_CHROME_PROFILE,
       PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
     """
     load_dotenv(env_path)
@@ -70,11 +83,21 @@ def load(env_path: str | None = None) -> Config:
             f"PLANNER_BACKEND must be 'hosted' or 'local', got {planner_backend!r}."
         )
 
+    risk_model_backend = os.environ.get("RISK_MODEL_BACKEND", "none").strip().lower()
+    if risk_model_backend not in ("none", "hosted", "local"):
+        raise RuntimeError(
+            f"RISK_MODEL_BACKEND must be 'none', 'hosted', or 'local', got {risk_model_backend!r}. "
+            "'none' (the default) keeps the keyword-only risk_classifier.py/boundary_guard.py floor "
+            "as the sole risk signal -- see eval/README.md before setting this to 'local'."
+        )
+
     cfg = Config(
         gemini_api_key=api_key,
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-flash"),
         planner_backend=planner_backend,
         local_planner_endpoint=os.environ.get("LOCAL_PLANNER_ENDPOINT"),
+        risk_model_backend=risk_model_backend,
+        local_risk_model_endpoint=os.environ.get("LOCAL_RISK_MODEL_ENDPOINT"),
         default_chrome_profile=os.environ.get("DEFAULT_CHROME_PROFILE", "Default"),
         profiles_dir=Path(os.environ.get("PROFILES_DIR", "./profiles")),
         max_steps_per_task=int(os.environ.get("MAX_STEPS_PER_TASK", "40")),
