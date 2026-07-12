@@ -56,6 +56,10 @@ class MemoryAPI:
     def set_preference(self, key: str, value: Any) -> None:
         self._semantic.set_preference(key, value)
 
+    def all_preferences(self) -> dict[str, Any]:
+        """Read-all for the GUI memory browser (src/gui/widgets/memory_panel.py)."""
+        return self._semantic.all_preferences()
+
     def get_site_quirk(self, site: str, key: str, default: Any = None) -> Any:
         return self._semantic.get_fact(site, key, default)
 

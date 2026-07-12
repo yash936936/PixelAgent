@@ -244,3 +244,79 @@ Append to the bottom of this file after each pass:
   (~40% overall, low per-category recall on the two highest-stakes categories) is recorded honestly in
   `eval/README.md` as the justification for Track B's risk model, not something to chase to 100% with
   more keywords.
+
+### [2026-07-12] Debug pass — Track B adoption verification (this session)
+- Files checked: entire project, verified fresh rather than trusting prior session's own claims.
+- Actions taken: clean venv, exact pinned `pip install -r requirements.txt` (succeeded), `pip install
+  pytest` (dev-only, correctly not in `requirements.txt`), `python -m pytest tests/ -q` (189/189 passed),
+  a full `pkgutil.walk_packages` smoke-import of all 29 `src/` modules (0 errors), and a real run of
+  `python -m eval.adversarial_boundary_eval` (reproduced the documented ~40% overall / 14%
+  evasive-category baseline accuracy exactly).
+- Issues found: none — this pass was purely verification of an already-debugged prior state, not new
+  development.
+- Result: **Pass.** Confirms the project's own prior `DECISIONS.md`/`STATUS.md` claims are accurate, not
+  just internally consistent.
+
+### [2026-07-12] Debug pass — GUI implementation (this session)
+- Files checked: all 10 new `src/gui/` files, plus the 2 modified `src/memory/` files
+  (`semantic_store.py`, `memory_api.py`).
+- Issues found:
+  1. `src/gui/style.py` — `SPACING` dict was keyed by string (`"24"`) instead of int, so
+     `style.SPACING[24]` (used throughout the widget files) raised `KeyError`. Caught immediately by a
+     direct smoke-test, before any widget code ran. Fixed by casting keys to `int` at load time.
+  2. `src/gui/widgets/memory_panel.py` — initially reached into `MemoryAPI._semantic` (private attribute)
+     to list preferences, violating `memory_api.py`'s own documented boundary. Fixed by adding a public
+     `all_preferences()` method to `SemanticStore` and a facade on `MemoryAPI`; added
+     `test_all_preferences_returns_reserved_namespace_only` and `test_all_preferences_facade` to lock this
+     in at both layers.
+  3. `src/gui/widgets/confirmation_dialog.py` — `_on_approve()` used `self._edit_box.isVisible()` to
+     detect whether the user had opened the edit field. This is a real Qt semantics bug: `isVisible()`
+     reflects whether the widget is actually painted on screen, which depends on the top-level window
+     having been shown — it does *not* simply reflect the last `setVisible()` call. Caught by
+     `tests/gui/test_confirmation_dialog.py::test_edit_box_populates_edited_step_when_visible` failing on
+     first run (the edit text was silently dropped). Fixed with an explicit `_edit_mode` boolean instead
+     of relying on Qt's visibility state — this is the kind of "silent failure point" this very protocol
+     exists to catch, and it would have shipped invisibly since it only manifests as "my edit never took
+     effect," not a crash.
+  4. Traced the `GateBridge`/`Qt.BlockingQueuedConnection` mechanism specifically for a deadlock risk,
+     since the wrong Qt connection type here (e.g. `AutoConnection` resolving to `QueuedConnection` across
+     threads) would hang the entire app on the first External/Destructive step with no error message at
+     all — the worst possible failure mode for a safety-critical gate. Verified with a real `QThread` (not
+     a mock) in `tests/gui/test_gate_bridge.py::test_gate_bridge_round_trip_across_real_thread`, which
+     would hang and eventually be killed by `worker.wait(2000)` timing out if the connection type were
+     wrong, rather than silently reporting false success.
+- Issues NOT fixed (external blockers): the GUI has never been shown on a real display (only
+  `QT_QPA_PLATFORM=offscreen`, which exercises real Qt widget code but not actual rendering/window-manager
+  interaction) and never driven through a real live task run — both require the user's actual Windows
+  machine.
+- Tests run: `QT_QPA_PLATFORM=offscreen python -m pytest tests/ -q` — 227/227 passed (189 pre-existing +
+  38 new); a full `pkgutil.walk_packages` smoke-import of all 41 `src/` modules including `src.gui` and
+  its `widgets` subpackage — 0 errors.
+- Result: **Pass** for everything testable without a real display. Live rendering and a real end-to-end
+  task run through the GUI still need to be verified by the user on Windows.
+
+### [2026-07-13] Debug pass — first live run bug fix (profile launch)
+- Files checked: `src/action/playwright_driver.py`, `src/gui/widgets/stats_panel.py`
+- Issues found:
+  1. **The project's first bug ever caught by a real live run, not a unit test.** The user ran a real
+     task through the GUI; the screenshots showed Pixel opening Gmail's logged-out marketing page and
+     needing a manual "Sign in" click, instead of the user's actual, already-authenticated inbox. Root
+     cause: `PlaywrightDriver` concatenated `profiles_dir / profile_name` and handed the result to
+     Chromium as if it were a complete, standalone user-data directory — Chromium creates an empty
+     `Default` profile inside whatever directory it's given if one doesn't already exist there, so this
+     silently produced a brand-new blank profile every run instead of reusing the real one. No prior unit
+     test caught this because none exercised the actual `launch_persistent_context` call — it had only
+     ever been mocked at the `ActionRouter`/`Orchestrator` level, one layer too high to see this. Fixed by
+     switching to `--profile-directory=<name>` against the real Chrome "User Data" root, and added
+     `tests/action/test_playwright_driver.py` that mocks `sync_playwright` itself and asserts the exact
+     `user_data_dir`/`args` passed to `launch_persistent_context` — this is now the regression test for
+     this specific class of bug.
+- Issues NOT fixed (external blockers): whether "Profile 3" is actually the user's intended "Yash" profile
+  on disk is still something only the user can confirm via `chrome://version` — the code fix makes profile
+  selection *work correctly*, it doesn't know which profile name is the right one.
+- Tests run: fresh venv, `pip install -r requirements.txt -r requirements-gui.txt pytest`,
+  `QT_QPA_PLATFORM=offscreen python -m pytest -q` — 232/232 passed (227 previous + 5 new); full
+  `pkgutil.walk_packages` smoke-import of all 41 `src/` modules — 0 errors.
+- Result: **Pass.** This entry exists specifically because a live run found something 232 passing unit
+  tests could not — worth keeping as a concrete example in this protocol of why "all tests green" isn't
+  the same as "verified against the real external system."

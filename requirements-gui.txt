@@ -1,0 +1,6 @@
+# Optional: only needed to run the GUI (python -m src.gui.app). The CLI
+# (python -m src.main) has no Qt dependency and works without this file.
+# Pinned to the version actually installed and tested against this codebase
+# in this build environment (offscreen platform, no real display) — see
+# requirements.txt's own header for why exact pins matter here.
+PySide6==6.11.1

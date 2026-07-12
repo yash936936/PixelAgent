@@ -28,3 +28,19 @@ See `docs/DECISIONS.md` for why, and `../context.md` for the full project map.
 
 ## Platform
 Windows desktop, single user, local-first. See `docs/PHASES.md` for the phased build order.
+
+## Running it
+CLI (no extra dependency):
+```
+pip install -r requirements.txt
+python -m src.main "your instruction here"
+```
+
+Native desktop GUI (full dashboard: task input + live trace + memory browser + LoopAudit stats):
+```
+pip install -r requirements.txt -r requirements-gui.txt
+python -m src.gui.app
+```
+The GUI is an alternate front-end to the exact same `Orchestrator`/`ConfirmationGate` as the CLI — not a
+separate codepath. See `docs/DESIGN.md` for the visual system (built from `docs/design-tokens/`) it's built
+from, and `docs/USER_GUIDE.md` / the repo root `USER_GUIDE.md` for full setup steps.

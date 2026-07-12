@@ -46,3 +46,14 @@ def test_all_episodes(memory):
     memory.record_task("task one", [], "done")
     memory.record_task("task two", [], "error")
     assert len(memory.all_episodes()) == 2
+
+
+def test_all_preferences_facade(memory):
+    # Added for the GUI memory browser — MemoryAPI.all_preferences() must
+    # exist so callers never reach into the private _semantic attribute.
+    memory.set_preference("default_chrome_profile", "Work")
+    memory.set_site_quirk("github.com", "cookie_banner_selector", "#accept")
+
+    prefs = memory.all_preferences()
+
+    assert prefs == {"default_chrome_profile": "Work"}

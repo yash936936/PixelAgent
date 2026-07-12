@@ -58,3 +58,17 @@ def test_preferences_convenience_wrappers(store):
 def test_complex_values_roundtrip(store):
     store.set_fact("app.example", "layout", {"nested": [1, 2, 3]})
     assert store.get_fact("app.example", "layout") == {"nested": [1, 2, 3]}
+
+
+def test_all_preferences_returns_reserved_namespace_only(store):
+    # Added for the GUI memory browser (src/gui/widgets/memory_panel.py) —
+    # must go through a public method rather than reaching into the
+    # namespace constant/private state directly.
+    store.set_preference("default_chrome_profile", "Work")
+    store.set_preference("max_steps", 40)
+    store.set_fact("github.com", "cookie_banner_selector", "#accept")
+
+    prefs = store.all_preferences()
+
+    assert prefs == {"default_chrome_profile": "Work", "max_steps": 40}
+    assert "cookie_banner_selector" not in prefs

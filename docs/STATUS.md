@@ -6,11 +6,12 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 5 — Hardening. Implemented and unit-tested (121 tests passing: 97 from Phases 1-4 + 24 new):
-`risk_classifier.py`'s rule table expanded from real-usage-log categories, and `trace_replay.py` (new)
-lets a developer step through any logged task trace. Not yet run live against a real screen/OS/LLM (same
-blocker as Phases 2-4 — requires the user's Windows machine, real logs from live runs, and the Tesseract
-binary).**
+**Phase: 5 — Hardening, complete. Plus: native Windows GUI (PySide6) added 2026-07-12, ahead of GPU model
+training per the user's stated plan (build the GUI now, train once real usage data exists). 232 tests
+passing total. Still not yet run live against a real screen/OS/LLM/display (same blocker throughout this
+project — requires the user's actual Windows machine, real logs from live runs, and the Tesseract binary;
+this session additionally verified via a clean venv + exact pinned installs + offscreen-Qt testing that
+everything up to that point works, rather than taking prior claims on faith).**
 
 ## Documentation files (`docs/` + root)
 
@@ -39,7 +40,7 @@ binary).**
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
 | `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 5 rule-table expansion + read-only guard) |
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
-| `src/action/playwright_driver.py` | 1.3 | Complete |
+| `src/action/playwright_driver.py` | 1.3 | Complete (fixed real profile-launch bug found via live GUI run, 2026-07-13) |
 | \`src/action/action_router.py\` | 1.3 (updated 2.2) | Complete (desktop branch added) |
 | \`src/action/mouse_keyboard.py\` | 2.2 | Complete |
 | `src/confirmation/gate.py` | 1.4 | Complete |
@@ -53,7 +54,18 @@ binary).**
 | `src/memory/semantic_store.py` | 3.2 | Complete |
 | `src/memory/memory_api.py` | 3.2 (updated Phase 4) | Complete |
 | `src/brain/research_router.py` | 4.1 | Complete |
-| `tests/` | ongoing | In progress (121 tests passing: 16 Phase 1 + 35 Phase 2 + 24 Phase 3 + 22 Phase 4 + 24 Phase 5) |
+| `src/gui/style.py` | GUI (2026-07-12) | Complete |
+| `src/gui/app.py` | GUI (2026-07-12) | Complete |
+| `src/gui/main_window.py` | GUI (2026-07-12) | Complete (full dashboard: composer + trace + stats + memory) |
+| `src/gui/worker.py` | GUI (2026-07-12) | Complete (background QThread + cross-thread confirmation bridge) |
+| `src/gui/gui_logger.py` | GUI (2026-07-12) | Complete |
+| `src/gui/widgets/task_composer.py` | GUI (2026-07-12) | Complete |
+| `src/gui/widgets/trace_panel.py` | GUI (2026-07-12) | Complete |
+| `src/gui/widgets/stats_panel.py` | GUI (2026-07-12) | Complete |
+| `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
+| `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
+| `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
+| `tests/` | ongoing | In progress (232 tests passing: 189 Phases 1-5 + 38 GUI/memory-facade + 5 new playwright_driver/stats_panel) |
 
 ## Known blockers
 - Live end-to-end run (real screen capture, real Tesseract OCR, real mouse/keyboard control, real Gemini
@@ -146,3 +158,37 @@ immediately caught two real bugs in `risk_classifier.py`'s read-only-guard logic
 trained-model provenance auditable via the model card + eval gate. 189 tests passing total, 24 new. See
 "Track B" section above for exactly what is and isn't done, and "Known gaps" further above for what
 remains from the prior pass.)
+
+---
+**Update 2026-07-12 (this session):** Re-verified this project end-to-end after being adopted as the
+working codebase: clean venv + exact pinned `requirements.txt` install succeeded, all 189 tests pass, all
+29 `src/` modules import cleanly, `eval/adversarial_boundary_eval.py` baseline reproduces the documented
+~40% overall / 14% evasive-category accuracy. Design system replaced: `docs/DESIGN.md` now points to the
+"Steep" token system (`docs/design-tokens/`) instead of the old console color scheme — no `src/` GUI code
+exists yet, this only affects future GUI implementation. Still true: zero live task runs have ever
+happened (see "Next action" above) — this remains the single biggest unblocking step, unchanged by this
+verification pass.
+
+---
+**Update 2026-07-12 (GUI added, same session):** Built the native Windows GUI (`src/gui/`, PySide6) per the
+user's choice — full dashboard scope. 41 `src/` modules now import cleanly (up from 29); 227 tests passing
+(189 + 38 new). Two real bugs found and fixed during this pass: (1) `MemoryPanel` initially reached into
+`MemoryAPI`'s private `_semantic` attribute — fixed by adding a proper public `all_preferences()` method to
+both `SemanticStore` and `MemoryAPI`; (2) `ConfirmationDialog` initially used `QWidget.isVisible()` to
+detect edit-mode, which is unreliable outside a fully shown window — fixed with an explicit boolean flag.
+The cross-thread confirmation bridge (`GateBridge`, using `Qt.BlockingQueuedConnection`) was specifically
+stress-tested with a real `QThread` to rule out a deadlock. GPU model training is intentionally still
+untouched, per the user's own stated plan (GUI first, training once real usage data exists) — see
+`training/README.md` for that plan's own prerequisites, which this GUI work does not change or shortcut.
+
+---
+**Update 2026-07-13 (first live run):** The user ran a real task through the GUI for the first time —
+this is the milestone `docs/STATUS.md` had flagged as the single biggest blocker throughout the whole
+project. It surfaced one real bug that no amount of unit testing had caught: `PlaywrightDriver` was
+launching against a freshly-created empty Chrome profile instead of the user's real, already-logged-in
+one (root cause: `user_data_dir` was built as `profiles_dir/profile_name` instead of using
+`--profile-directory` against the real "User Data" root). Fixed, with a new regression test
+(`tests/action/test_playwright_driver.py`) that mocks `sync_playwright` directly and asserts the exact
+launch arguments — the first test in this project to actually verify what gets passed to Chromium, rather
+than mocking one layer above it. Also removed the "Est. cost" card from the GUI's Loop Audit panel per
+user request (still tracked internally, just not displayed). 232 tests passing total.

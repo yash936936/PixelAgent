@@ -61,6 +61,13 @@ class SemanticStore:
         ).fetchall()
         return {key: json.loads(value_json) for key, value_json in rows}
 
+    def all_preferences(self) -> dict[str, Any]:
+        """Public read-all for the reserved preferences namespace — added
+        for the GUI memory browser (src/gui/widgets/memory_panel.py), which
+        must go through a public method rather than reaching into this
+        store's namespace constant or private state directly."""
+        return self.all_facts(_PREFERENCES_NAMESPACE)
+
     def delete_fact(self, namespace: str, key: str) -> None:
         self._conn.execute("DELETE FROM facts WHERE namespace = ? AND key = ?", (namespace, key))
         self._conn.commit()

@@ -351,3 +351,118 @@ made by adding a new dated entry, not editing old ones.
   than glossed over. `risk_model_backend` defaults to `"none"` — nothing about this pass changes
   runtime behavior unless a human explicitly opts in via `.env`, and doing so before the eval gate is
   cleared is a documented misuse of the config, not something the code can prevent by itself.
+
+### [2026-07-12] Design system replaced: console color scheme -> "Steep" token system
+- **Type:** Overwrite + New file (multiple)
+- **File(s) affected:** `docs/DESIGN.md` (overwritten), `docs/design-tokens/tokens.json` (new),
+  `docs/design-tokens/variables.css` (new), `docs/design-tokens/theme.css` (new),
+  `docs/design-tokens/DESIGN_source.md` (new), `context.md` (file map entry updated)
+- **What changed:** The old `DESIGN.md` (amber/red/green console-prompt palette) is fully replaced by a
+  user-supplied design token system ("Steep" — near-monochrome, Signifier serif + Sohne sans, single peach
+  accent, pill buttons, 24px card radius). Raw token files are preserved verbatim under
+  `docs/design-tokens/` as the machine-readable source of truth; `docs/DESIGN.md` is now a narrative layer
+  distilling those tokens for Pixel-Agent-specific use, including a new Risk-State Mapping table that
+  reconstructs the old External/Destructive/Success/Denied visual distinctions using only tokens from this
+  system (since it has no built-in red/amber/green) — External uses ink-black-on-peach, Destructive uses
+  sienna-brown-on-peach, both always paired with a text label per the existing color-plus-label
+  accessibility rule.
+- **Why:** User provided a specific design system (tokens.json/variables.css/theme.css/style-reference md)
+  and instructed that it be used strictly for all future UI work, replacing the ad hoc console scheme.
+- **Impacts:** Any future GUI implementation (dashboard, confirmation prompt, trace viewer) must be built
+  from `docs/design-tokens/tokens.json` values only — this is now enforced by instruction in `context.md`'s
+  file map, not just by convention. No source code changes yet; no GUI has been implemented in `src/` as of
+  this entry.
+
+### [2026-07-12] Adopted uploaded "Track B" project as the working codebase, replacing the in-progress
+Phase 3 build
+- **Type:** Overwrite (whole-project replacement)
+- **File(s) affected:** entire project tree (previous partial Phase 3 work backed up separately, not
+  deleted)
+- **What changed:** The user supplied a more advanced, independently-developed version of this project
+  (received as `pixel-agent-trackb.zip`) that already includes Phase 3 (memory), a Phase 4 "Track B"
+  addition (a separate, additive-only `RiskModelBackend` alongside the existing keyword `risk_classifier.py`
+  and a `boundary_guard.py`), an adversarial evaluation harness (`eval/`), and LoRA fine-tuning scaffolding
+  for two independent models (`training/`) — none of which had been built yet in this session's own Phase 3
+  work-in-progress. This was adopted as the new working codebase.
+- **Why:** User uploaded it and referred to it as "the above system" to test and build a GUI for; it is
+  substantially further along (189 passing tests vs. this session's 51 at the end of Phase 2) and was
+  clearly built with the same architecture, hard boundaries, and file-map conventions this project's own
+  `docs/` establish, so adopting it is a continuation, not a divergence.
+- **Impacts:** All Phase 3/4-related `docs/STATUS.md`, `docs/PHASES.md`, `docs/CODE_LOGIC.md`, and
+  `docs/DECISIONS.md` content now reflects the uploaded project's own history (its `DECISIONS.md` entries
+  are kept as-is above this one, not rewritten). Verified in this session: clean venv + exact pinned
+  `requirements.txt` install succeeds, all 189 tests pass, all 29 `src/` modules import cleanly, and
+  `eval/adversarial_boundary_eval.py`'s baseline run reproduces the documented ~40% overall /
+  14% evasive-category accuracy — confirming the project's own claims rather than taking them on faith.
+
+### [2026-07-12] Native Windows GUI implemented (PySide6, full dashboard)
+- **Type:** New file (multiple) + Overwrite (2 memory files, per below)
+- **File(s) affected:** `src/gui/style.py`, `src/gui/app.py`, `src/gui/main_window.py`,
+  `src/gui/worker.py`, `src/gui/gui_logger.py`, `src/gui/widgets/{task_composer,trace_panel,stats_panel,
+  memory_panel,confirmation_dialog}.py` (all new), `requirements-gui.txt` (new, kept separate from
+  `requirements.txt` so CLI-only installs stay lean), `src/memory/semantic_store.py` (added
+  `all_preferences()`), `src/memory/memory_api.py` (added `all_preferences()` facade), plus 8 new test
+  files under `tests/gui/` and additions to `tests/memory/test_semantic_store.py` and
+  `tests/memory/test_memory_api.py`.
+- **What changed:** Built a native Windows desktop dashboard per the user's explicit choices (PySide6, full
+  dashboard scope: task input + live trace + memory browser + LoopAudit stats). Every color/font/spacing
+  value is loaded from `docs/design-tokens/tokens.json` through `src/gui/style.py` — nothing hardcoded.
+  `ConfirmationDialog` implements the exact `prompt_fn(step, risk, context) -> GateDecision` contract
+  `ConfirmationGate` already expected (that contract, including the `GateContext` fallback handling, was
+  already in place in `gate.py`/`console_prompt.py` before this session — the GUI is the second, not first,
+  implementation of it). `TaskWorker` runs `Orchestrator.run_task()` on a background `QThread`; the
+  confirmation gate crosses back to the GUI thread via `GateBridge`, which uses a
+  `Qt.BlockingQueuedConnection` signal — the worker thread's call to `gate.request_approval()` genuinely
+  blocks until the user closes the dialog, matching the exact synchronous semantic the rest of the
+  orchestrator loop already assumes.
+- **Why:** User requested a native Windows GUI (PySide6) showing a full dashboard, ahead of GPU training
+  (per the stated plan: build the GUI now, train models later once real usage data exists).
+- **Two real bugs found and fixed during this pass, not just written and shipped:**
+  1. `MemoryPanel` initially reached into `MemoryAPI._semantic` (a private attribute) to list preferences —
+     violated `memory_api.py`'s own stated rule that "nothing else should import the store classes
+     directly." Fixed by adding a proper public `all_preferences()` method to both `SemanticStore` and
+     `MemoryAPI`, with new tests for both.
+  2. `ConfirmationDialog._on_approve()` originally used `self._edit_box.isVisible()` to detect whether the
+     user had opened the edit field — this is unreliable because Qt's `isVisible()` reflects actual
+     on-screen visibility (dependent on the whole window being shown), not just the widget's own
+     `setVisible()` call, so it silently failed whenever the dialog was tested or driven without a real
+     `.exec()`/`.show()` call. Caught by `tests/gui/test_confirmation_dialog.py`'s edit-box test failing on
+     first run. Fixed with an explicit `_edit_mode` boolean flag instead of relying on Qt visibility state.
+- **Impacts:** `docs/STATUS.md` and `docs/DEBUG.md` updated. The cross-thread `GateBridge` mechanism was
+  specifically stress-tested with a real `QThread` (not just mocked) to rule out a deadlock, since a wrong
+  connection type there would hang the whole app on the first External/Destructive step — see
+  `tests/gui/test_gate_bridge.py`. GPU model training (per the user's stated plan) remains untouched and
+  still blocked on real usage data, unchanged by this GUI work.
+
+### [2026-07-13] Fixed real profile-launch bug found via a live GUI run, removed Est. cost from GUI
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/action/playwright_driver.py`, `src/gui/widgets/stats_panel.py`,
+  `.env.example`, plus new `tests/action/test_playwright_driver.py` and updates to
+  `tests/gui/test_stats_panel.py`
+- **What changed:**
+  1. **Real bug, found by the user's own first live task run** (not caught by any prior unit test, because
+     no test exercised the actual Playwright launch call): `PlaywrightDriver.__init__` was building
+     `user_data_dir` as `profiles_dir / profile_name` (e.g. `...\User Data\Profile 3`) and handing that
+     whole path straight to `launch_persistent_context`. Chromium treats whatever directory it's given as
+     the *entire* user-data root and looks for a `Default` profile inside it — since no such subfolder
+     existed inside `...\Profile 3\`, Chromium silently created a brand-new, empty, logged-out profile
+     there instead of opening the user's real, already-logged-in "Profile 3". This is exactly what the
+     screenshots showed: Pixel landed on Gmail's public marketing page and had to be told to click
+     "Sign in," instead of opening the real inbox. Fixed by passing `user_data_dir` as the real Chrome
+     "User Data" **root** and selecting the profile via the `--profile-directory=<name>` launch arg
+     instead — the same mechanism real Chrome itself uses to open a specific profile from a shared root.
+     Also wrapped the launch call so a failure (most commonly: the real Chrome still running on that same
+     profile, blocking Playwright via its lock file) raises a new `ChromeProfileLaunchError` with an
+     actionable message instead of a raw Playwright exception.
+  2. Removed the "Est. cost ($)" stat card from `StatsPanel` per explicit user request. `LoopAudit` still
+     computes and logs `est_cost` internally (unchanged) — only the GUI display was removed, not the
+     underlying tracking, since other consumers (the trace log file, a future export) may still want it.
+- **Why:** User uploaded screenshots of the GUI's first real live run, which surfaced the profile bug
+  directly, and asked to check `.env` for problems and remove the cost display.
+- **Impacts:** `.env.example` rewritten with an explicit, corrected explanation of what `PROFILES_DIR` must
+  actually point at (the Chrome "User Data" root, not a Pixel-owned or profile-specific folder) and a
+  reminder that real Chrome must be fully closed before running Pixel. This is the first bug in this
+  project actually caught by a live run rather than by a unit test or code review — a good illustration of
+  why `docs/STATUS.md` has consistently flagged "zero live task runs" as the single biggest blocker: this
+  exact class of bug (correct-looking code that's wrong about an external system's actual behavior) cannot
+  be caught any other way.

@@ -31,7 +31,7 @@ before proceeding.
 | `docs/PHASES.md` | Build plan, broken into phases and parts, with exact files each part creates/updates and a description of each | Read before starting any new phase/part. This is the authoritative file list and ownership map — `STATUS.md` mirrors it. |
 | `docs/APPFLOW.md` | End-user runtime flow: what happens step by step when a task runs | Update whenever runtime behavior actually changes, so it never describes an idealized version of the code. |
 | `docs/WORKFLOW.md` | Developer/build lifecycle: setup, build order, test, debug, package | Read before setting up a dev environment or starting a build session. |
-| `docs/DESIGN.md` | Color scheme, typography, and layout for the confirmation UI/dashboard | Read before building or changing any user-facing prompt/UI element. |
+| `docs/DESIGN.md` | The "Steep" design system (colors, typography, spacing, components) — the only design source for any GUI surface. Raw tokens in `docs/design-tokens/`. | Read before building or changing any user-facing GUI element. Never introduce colors/type/spacing outside `docs/design-tokens/tokens.json`. |
 | `docs/DECISIONS.md` | Append-only log of every decision and every file write/overwrite | **Update every single time a file is created or overwritten** — entry first, using the template in that file. |
 | `docs/STATUS.md` | Current status of every doc and source file, plus overall phase progress | Update immediately after any file's status changes. |
 | `docs/DEBUG.md` | The line-by-line debug protocol and its running log | Run this full protocol after every codebase update, before considering the update done. Append a Debug Notes entry each time. |
@@ -48,6 +48,14 @@ before proceeding.
   `src/perception/`; task history comes from `src/memory/episodic_store.py`; user preferences come from
   `src/memory/semantic_store.py`. No runtime data is fabricated or assumed — every subsystem in `PHASES.md`
   specifies exactly what it reads and writes.
+
+## GUI (added 2026-07-12, per docs/DESIGN.md)
+`src/gui/` is a native Windows desktop dashboard (PySide6) — an alternate front-end to the same
+`Orchestrator`/`ActionRouter`/`ConfirmationGate` used by `src/main.py`'s CLI, not a separate codepath. Run
+via `python -m src.gui.app` after `pip install -r requirements-gui.txt` (kept separate from
+`requirements.txt` so CLI-only installs stay lean). Every visual element in `src/gui/` must be built from
+`docs/design-tokens/tokens.json` values via `src/gui/style.py` — see `docs/DESIGN.md`'s Risk-State Mapping
+for how External/Destructive/Local/Done/Denied states are represented without introducing new colors.
 
 ## Operating instructions for the AI, every session
 1. Read this file, then `docs/STATUS.md` to see where the project actually is.
