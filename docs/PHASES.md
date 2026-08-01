@@ -169,8 +169,215 @@ over logged tasks; full trace replay works for any logged task.
 
 ---
 
+## Phase 6 — Live-wire the semantic risk layer
+Goal: connect the semantic risk/boundary layer (`semantic_matcher.py`, `SemanticRiskJudge`,
+`semantic_boundary_match` — added 2026-08-01, currently proven only via
+`eval/adversarial_boundary_eval.py --model semantic`) to the actual live orchestrator, which has no path to
+it at all today.
+
+| File | Description |
+|---|---|
+| `src/config.py` (updated) | Add `"semantic"` as a valid `risk_model_backend` value alongside `"none"/"hosted"/"local"`. No new endpoint config needed — this backend is local/in-process, unlike `"local"`. |
+| `src/main.py` (updated) | Add a branch in the risk-judge builder returning `SemanticRiskJudge().judge` when `cfg.risk_model_backend == "semantic"`. |
+| `src/brain/orchestrator.py` (updated) | Wire `semantic_boundary_match()` into `_check_boundary()` as an explicit second, additive layer alongside `boundary_guard.check()` — log both verdicts, never let the semantic layer override the keyword layer's non-negotiable stop. |
+| `docs/DECISIONS.md`, `docs/STATUS.md` | Record the wiring decision once shipped, same convention as every other change in this project. |
+
+**Phase 6 success criterion:** a live task run with `RISK_MODEL_BACKEND=semantic` actually escalates a
+paraphrased destructive/boundary step that the keyword-only baseline would have missed — verified by trace
+log, not just the eval harness.
+
+---
+
+## Phase 7 — First real live validation (Windows)
+Goal: close the "zero live validation" gap that has been honestly flagged since Phase 5 — the browser path
+has been live-run-tested once (2026-07-13, profile-launch bug); the desktop path never has.
+
+| File | Description |
+|---|---|
+| *(no new files — validation phase)* | First live run of the browser (Playwright) path on the user's real Windows machine, generating real `logs/task_*.jsonl` traces. |
+| `src/action/mouse_keyboard.py` | First-ever live test of the desktop/OS-level mouse-keyboard path — a distinct code path from the browser branch, with genuinely zero real-world validation to date. |
+| *(observation only)* | Real Windows DPI/multi-monitor scaling against OCR-derived click coordinates — the `tests/integration/` harness deliberately fixed viewport size to sidestep this, so it remains untested until now. |
+
+**Phase 7 success criterion:** one full task completes end-to-end on real Windows hardware via each
+execution path (browser and desktop), with a real trace log to inspect for coordinate drift, OCR misses, or
+timing issues that no mock could reveal.
+
+---
+
+## Phase 8 — Data security & retention
+| File | Description |
+|---|---|
+| `src/memory/semantic_store.py`, `episodic_store.py` (updated) | Design pass for encryption-at-rest — key management/storage decision required first, deliberately not shortcut here. |
+| `src/observability/logger.py` (updated) | Screenshot/log retention policy (how long, where, encrypted or not) for the `logs/` directory. |
+
+**Phase 8 success criterion:** a documented, reviewed design decision (recorded in `docs/DECISIONS.md`) for
+where keys live and how long screenshots/logs persist — before any live run touches a real, personal Chrome
+profile with real account data.
+
+---
+
+## Phase 9 — Injection-aware risk signal
+| File | Description |
+|---|---|
+| `src/brain/boundary_guard.py` (updated) | Add a distinct signal for "planned step's rationale traces back to on-screen text that itself reads like an instruction" — separate from ordinary keyword/semantic risk classification, since this is a different threat model (attacker-controlled webpage content, not user phrasing). |
+| `eval/adversarial_cases.jsonl` (updated) | New fifth category, per `eval/README.md`'s own "Adding a fifth category later" note — prompt-injection-sourced instructions, with adversarial examples once real pages exist to mine from (Phase 7). |
+
+**Phase 9 success criterion:** a step whose action originated from injected on-screen text (not the user's
+own task description) is flagged distinctly in the trace log, even when its phrasing alone wouldn't trip
+risk classification.
+
+---
+
+## Phase 10 — Track B data bootstrap (bridge to real training)
+| File | Description |
+|---|---|
+| `src/observability/trace_replay.py` | Use `unclassified_or_missing_risk()` against Phase 7's real logs to mine actual correction examples. |
+| `src/brain/semantic_matcher.py` (updated) | Expand exemplar banks with real logged phrasing, not just hand-written paraphrases — a cheap bridge step before full LoRA training. |
+| `training/prepare_dataset.py`, `training/train_lora.py` | Only runnable once Phase 7 has produced enough real data and a real GPU machine is available — unchanged blocker, not resolved by this phase. |
+
+**Phase 10 success criterion:** `eval/adversarial_boundary_eval.py --model semantic` shows a measurable
+recall improvement on `evasive_destructive`/`boundary_evasion` from real-data-informed exemplars, as a
+checkpoint before attempting the full trained-model gate in `eval/README.md`.
+
+---
+
+## Phase 11 — Packaging & distribution
+Goal: everything up to Phase 10 makes the agent safe and validated to run; nothing yet makes it installable
+by anyone other than a developer running from source.
+
+| File | Description |
+|---|---|
+| `installer/` (new) | Windows installer (e.g. Inno Setup or MSIX) bundling the app, Python runtime, Tesseract binary, and Playwright's Chromium — end users should never `pip install` from source. |
+| `src/gui/app.py` (updated) | First-run setup wizard: Gemini API key entry, Chrome profile selection, permissions explanation — currently assumes a developer editing `.env` by hand. |
+| `pyproject.toml` (new) | Proper packaging metadata instead of a loose `requirements.txt`, pinned dependency versions. |
+| `docs/RELEASE.md` (new) | Build/sign/release process, including code-signing the installer so Windows SmartScreen doesn't flag it. |
+
+**Phase 11 success criterion:** someone who isn't the author can download one file, install it, and get to a
+working first task with no terminal/source access.
+
+---
+
+## Phase 12 — Docker deployment (browser-only mode)
+Goal: containerize the subset of PixelAgent that can genuinely run headless on Linux. Real OS-level desktop
+automation (`mouse_keyboard.py`) fundamentally cannot run in a headless Linux container — this phase scopes
+that limitation explicitly rather than pretending the whole agent containerizes. See Phase 13 for the
+desktop-automation path.
+
+| File | Description |
+|---|---|
+| `src/action/action_router.py` (updated) | Explicit `execution_mode: "browser_only" \| "full_desktop"` config check — the container build must refuse to select the desktop/mouse-keyboard branch rather than fail confusingly at runtime with no real display. |
+| `Dockerfile` (new) | Base image with Python, the Tesseract binary, and Playwright's Chromium pre-installed (`playwright install --with-deps chromium`) — mirrors what Phase 7 already proved works for the browser path. |
+| `docker-compose.yml` (new) | Wires up `GEMINI_API_KEY`, volume mounts for `logs/` and `profiles/` (episodic/semantic memory and browser profiles persist across restarts), and resource limits (ties into Phase 14's cost/runaway-task concerns). |
+| `.dockerignore` (new) | Excludes `tests/`, `training/`, dev-only tooling from the image. |
+| `docs/DOCKER.md` (new) | Explicit, upfront statement of the browser-only limitation, setup instructions, and how logs/screenshots surface outside the container (ties into Phase 8's retention/encryption decision — a container volume is another place unencrypted screenshots could live). |
+| `src/config.py` (updated) | Container-friendly defaults — `PROFILES_DIR`/`LOG_DIR` pointing at mount points rather than relative paths assuming a local dev checkout. |
+
+**Phase 12 success criterion:** a browser-only task runs successfully end-to-end inside the container from a
+fresh `docker compose up`, with logs and memory persisting across a container restart, and the image clearly
+documents (and the code enforces) that desktop-automation tasks are out of scope here.
+
+---
+
+## Phase 13 — Docker deployment (full desktop automation, via nested Windows VM)
+Goal: the only way to genuinely containerize real desktop automation is to containerize a real Windows
+machine — a Windows guest running inside a VM (QEMU/KVM) inside the container (the pattern the open-source
+`dockur/windows` project uses), with PixelAgent installed normally inside that guest. This is materially
+heavier than Phase 12 and deliberately its own phase.
+
+| File | Description |
+|---|---|
+| `docker/windows-vm/Dockerfile` (new) | QEMU/KVM-based container running a real Windows guest — requires the Docker host to expose `/dev/kvm` (rules out most shared/serverless hosts; needs a dedicated VM or bare-metal server). |
+| `docker/windows-vm/provision.ps1` (new) | Guest-side provisioning: installs Phase 11's Windows installer, Tesseract, Chrome, and Playwright dependencies inside the guest — PixelAgent runs natively inside the VM, not adapted for Linux. |
+| `docker-compose.desktop.yml` (new) | Exposes the guest desktop via noVNC/RDP for human oversight (needed for the confirmation-gate UI, which needs a real display), mounts persistent volumes for the guest's Chrome profile, `logs/`, and memory stores. |
+| `src/config.py` (updated) | Container-orchestration hooks — a thin HTTP API wrapping `orchestrator.run_task()`, since there's no host-side process to exec into for a nested VM the way there is for Phase 12's native Linux container. |
+| `docker/windows-vm/reset-snapshot.sh` (new) | Clean-state reset between tasks/batches — snapshot-and-restore the guest so each run starts from known-clean Windows state rather than accumulating drift across unattended runs. |
+| `docs/DOCKER_DESKTOP.md` (new) | Host requirements (nested virtualization support, realistic RAM/CPU/disk sizing for a full Windows guest) and the tradeoff this phase documents: this is genuinely running Windows, not emulating Windows automation on Linux, so it inherits Windows licensing and patching concerns as a real, separate OS instance. |
+
+**Phase 13 success criterion:** a real desktop-automation task (one that specifically exercises
+`mouse_keyboard.py` against a native Windows app, not a browser task) completes end-to-end inside the
+VM-in-container deployment, controllable remotely via noVNC/RDP, with a clean guest-state reset available
+between runs.
+
+---
+
+## Phase 14 — CI/CD & release engineering
+| File | Description |
+|---|---|
+| `.github/workflows/test.yml` (new) | Every push runs the full non-GUI suite, GUI suite (offscreen Qt), and the adversarial eval — every test run in this project's history to date has been manual. |
+| `.github/workflows/release.yml` (new) | Automated build of Phase 11's Windows installer and Phase 12/13's Docker images on tag push, with smoke tests for each. |
+| `CHANGELOG.md` (new) | User-facing release notes, separate from `docs/DECISIONS.md`'s developer-facing append-only log. |
+| Versioning scheme (semver) | Applied to the app itself and, separately, to any trained Track B model artifact — so a model regression can be rolled back independently of an app update. |
+
+**Phase 14 success criterion:** a merge to main automatically produces a tested, installable build (native +
+both Docker variants); a bad release can be rolled back without manual intervention.
+
+---
+
+## Phase 15 — Operational safety limits
+| File | Description |
+|---|---|
+| `src/config.py` (updated) | Hard ceilings beyond `max_steps_per_task`: max cost per task, max concurrent tasks, per-task wall-clock timeout with forced termination. |
+| `src/brain/orchestrator.py` (updated) | Enforce the above — currently `max_steps_per_task` exists but nothing stops a stuck/looping task on cost or wall-clock time. |
+| `src/observability/logger.py` (updated) | Crash/hang detection — long-running-session stability (browser memory leaks, orphaned Playwright/Chromium processes) has never been tested past a single task. |
+| Monitoring hook (new, e.g. lightweight local dashboard or opt-in telemetry) | Error rate, cost, and stuck-task visibility for a user running this unattended — currently only visible via manual trace-log inspection. |
+
+**Phase 15 success criterion:** the agent survives a multi-hour stress run (repeated tasks back-to-back)
+without a memory leak, orphaned process, or runaway cost, and self-terminates cleanly when a limit is hit.
+
+---
+
+## Phase 16 — Security review
+| File | Description |
+|---|---|
+| *(review, not new code)* | Independent (ideally third-party, at minimum a fresh-eyes self-review) audit of the confirmation-gate/boundary-guard trust boundary — the eval harness's cases are a good regression suite, not a security audit. |
+| `eval/adversarial_cases.jsonl` (expanded) | Grow well past the current case count using real red-team attempts, not just hand-written paraphrases. |
+| Credential/secrets handling (review) | `.env`-based API key storage, Chrome profile access, and Phase 8's encryption-at-rest design all need a dedicated pass focused specifically on "what happens if this machine is compromised." |
+
+**Phase 16 success criterion:** a documented security review exists, findings are triaged and either fixed
+or explicitly accepted with reasoning recorded in `docs/DECISIONS.md`.
+
+---
+
+## Phase 17 — Legal & trust
+| File | Description |
+|---|---|
+| `TERMS.md`, `PRIVACY.md` (new) | User-facing terms and a privacy policy covering what's logged, where, and for how long (depends on Phase 8's retention decision). |
+| `docs/COMPLIANCE.md` (new) | Explicit review of target sites' Terms of Service re: automated access — a real liability question the moment this runs on behalf of anyone other than the original developer against their own accounts. |
+| Audit trail for end users (updated `trace_replay.py` or new export) | The existing trace logs were built for developer debugging. A second party trusting this agent with their accounts needs a legible "what did it do, when, why" view — not raw JSONL. |
+
+**Phase 17 success criterion:** a documented answer (not necessarily "yes it's fine everywhere") to "what
+happens legally if this agent takes an action a site's ToS prohibits," and an audit trail an end user could
+actually read.
+
+---
+
+## Phase 18 — Field testing / beta
+| File | Description |
+|---|---|
+| *(process, not code)* | A small group of real users — people who are not the author, on hardware/configurations the author didn't set up — run this for real tasks over a real period of time. This is the only way to surface failure modes a single developer's supervised testing structurally cannot: unexpected site layouts, unusual DPI/monitor setups, edge-case account states. |
+| Feedback/crash-report channel (new) | Some way for beta users to report a failure with enough context (trace log excerpt) to be actionable, without exposing their full screenshot history. |
+| `docs/BETA_FINDINGS.md` (new) | Honest record of what broke during beta and what got fixed, same append-only spirit as `docs/DECISIONS.md`. |
+
+**Phase 18 success criterion:** a defined number of beta users (even just 5–10) complete real tasks across a
+real time window (e.g. two weeks) with no unrecoverable failures and no unrecovered-from safety-boundary
+miss.
+
+---
+
+## Deployment readiness gate
+"Production ready" means all of Phases 6–18 done, in order, with each phase's success criterion actually met
+and recorded — not just "code exists." Phases 6–10 make the core safe to run at all; 11–13 make it
+installable and operable across native Windows, browser-only Docker, and full-desktop Docker targets; 14–15
+make it CI/CD-automated and operationally bounded; 16–17 make it security- and legal-sound to hand to someone
+else; 18 is the only phase that proves any of the above holds up outside one developer's own supervised use.
+
+---
+
 ## Explicitly deferred (not scheduled in any phase)
 - Certification/exam auto-completion
 - Signup/verification bypass
-- Multi-user or cloud-hosted deployment
-- Non-Windows platforms
+- Non-Windows platforms (Phase 12's browser-only Docker image runs on Linux, but that's a deployment
+  target for the existing Windows-authored codebase, not a native non-Windows port)
+- True multi-user/multi-tenant deployment (a single shared instance serving many independent users with
+  isolation between them) — Phases 12–13 containerize a single-user instance for easier deployment, which is
+  a different problem from multi-tenancy and remains unaddressed
