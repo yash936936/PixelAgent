@@ -532,3 +532,66 @@ Phase 3 build
   not restructured — this work follows the same convention as the earlier GUI/Track-B additions (tracked
   in `STATUS.md`/`DECISIONS.md` directly rather than inserted as a new numbered phase in a doc meant to
   define file structure ahead of implementation).
+
+### [2026-08-01] Phase 6 — semantic risk/boundary layer actually live-wired into the orchestrator
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/config.py`, `src/main.py`, `src/brain/orchestrator.py`,
+  `tests/test_config.py`, `tests/test_main.py`, `tests/brain/test_orchestrator.py`.
+- **What changed:** The previous entry (also dated 2026-08-01) built `SemanticRiskJudge` and
+  `semantic_boundary_match`, proven only via `eval/adversarial_boundary_eval.py --model semantic` — the
+  live orchestrator had no path to either. Closed that gap:
+  1. `config.py`: `risk_model_backend` now accepts `"semantic"` alongside `"none"/"hosted"/"local"`, with
+     no new endpoint field required (it's in-process, unlike `"local"`).
+  2. `main.py`'s `_build_risk_model_judge()`: new branch returns `SemanticRiskJudge().judge` for
+     `RISK_MODEL_BACKEND=semantic` — wired the exact same way `llm_risk_judge` already gets passed to
+     `Orchestrator` for `"hosted"`/`"local"`, so this reuses the existing escalation path in
+     `orchestrator._classify_risk()` rather than adding a new one.
+  3. `orchestrator.py`'s `_check_boundary()`: `semantic_boundary_match()` now runs as an always-on second
+     layer after the keyword `boundary_guard.check()` — consulted only when the keyword layer found
+     nothing (so it can only add stops, never remove or downgrade one), and both layers' verdicts are
+     logged with a `detected_by: "keyword" | "semantic"` field so a reviewer can tell which layer actually
+     caught a given case. This mirrors `boundary_guard.py`'s own "cannot be disabled by config" design —
+     there is no config knob to turn either boundary layer off.
+- **Why:** Phase 6 of the post-hardening roadmap (`docs/PHASES.md`) — this was flagged as the single
+  highest-leverage, lowest-cost open item in the 2026-08-01 status report: the eval score improvement
+  (40% → 73% overall) was real but inert on any actual task run until wired in.
+- **Impacts:** 221 → 229 tests passing (+8: 4 `test_config.py` covering the new `"semantic"` value and
+  existing `"local"`/invalid-value validation which had no prior coverage, 1 `test_main.py` proving the
+  new builder branch returns a working judge with no endpoint needed, 2 `test_orchestrator.py` proving the
+  semantic boundary layer both catches a paraphrase the keyword layer misses and stays silent/non-double-
+  logged when the keyword layer already caught something, 1 end-to-end `test_orchestrator.py` test proving
+  `SemanticRiskJudge` wired exactly as `main.py` now wires it actually reaches the confirmation gate with
+  the escalated risk tier and produces a real `llm_risk_escalation` log event). `docs/PHASES.md`'s Phase 6
+  marked complete. Phase 7 (first real live validation on Windows) remains the next item, unchanged by
+  this pass — none of Phase 6's wiring has been exercised against a real Gemini call or real user-facing
+  confirmation dialog, only against mocks, same caveat as every other orchestrator-level test in this
+  project prior to a real live run.
+
+### [2026-08-01] Phase 7 prep — pre-flight doctor tool + live-run checklist (not the live run itself)
+- **Type:** New
+- **File(s) affected:** `src/doctor.py` (new), `tests/test_doctor.py` (new),
+  `docs/PHASE_7_CHECKLIST.md` (new).
+- **What changed:** Phase 7 (`docs/PHASES.md`) requires the user's actual Windows machine and cannot be
+  executed or verified from this build environment. Rather than leave it as an unstructured "go run it and
+  see," added `python -m src.doctor` — a pre-flight diagnostic that checks every environment prerequisite
+  (Tesseract binary on PATH, Playwright Chromium launches, `GEMINI_API_KEY`/config loads, `profiles_dir`/
+  `log_dir` writable, Phase 6's semantic layer working) without executing any real task, click, or
+  destructive action. Desktop-control/display availability is checked but marked `optional` — mirrors
+  `main.py`'s own existing `_build_desktop_backends()` graceful-degradation behavior (browser-only tasks
+  still work without a real display). An `--live` flag makes one real, minimal Gemini API call to confirm
+  the key works end-to-end; without it, the tool costs nothing to run repeatedly while debugging setup.
+  `docs/PHASE_7_CHECKLIST.md` gives the step-by-step live-run sequence (doctor tool → Chrome profile
+  verification per the 2026-07-13 profile-bug lesson → browser-only task first → desktop-target-type task
+  → capture the trace log → report back), explicitly ordered to validate the already-partially-proven
+  browser path before the completely untested desktop path.
+- **Why:** Phase 7 is the first phase in this project's history that fundamentally cannot be completed or
+  verified by an agent working in a build sandbox — it requires real hardware the user must operate
+  directly. This is the highest-leverage thing to prepare in the meantime: front-loading environment-setup
+  failures (missing Tesseract, wrong Chrome profile path, no Playwright browsers installed) into a 5-second
+  local check rather than discovering them mid-live-run, and giving Phase 7 a concrete, ordered checklist
+  instead of leaving "run it and see what happens" underspecified.
+- **Impacts:** 229 → 240 tests passing (+11, all against mocked Tesseract/Playwright/pyautogui — the
+  doctor tool's own logic is fully testable without real hardware even though what it checks isn't). Phase
+  7 itself is NOT complete — this entry only records the preparation for it. The actual live run, and
+  everything Phase 7's success criterion requires, still needs to happen on the user's machine and be
+  reported back before `docs/PHASES.md`'s Phase 7 can be marked complete.

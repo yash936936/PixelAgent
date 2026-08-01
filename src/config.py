@@ -36,7 +36,16 @@ class Config:
     # swapped independently (see src/brain/risk_model_backend.py's
     # docstring for the full rationale, and eval/README.md for the
     # mandatory eval-gate before enabling this in production).
-    risk_model_backend: str = "none"  # "none" | "hosted" | "local"
+    #
+    # "semantic" (added 2026-08-01, live-wired Phase 6) is a fourth option:
+    # SemanticRiskJudge, a zero-dependency char-n-gram similarity judge --
+    # no network/GPU/endpoint required, unlike "hosted"/"local". It is NOT
+    # a substitute for a real trained model and does not need or use the
+    # eval/README.md deployment gate that "local" does (see
+    # risk_model_backend.py's SemanticRiskJudge docstring for why); it's
+    # safe to enable by default-adjacent, since it fails open to "no
+    # opinion" exactly like every other backend here.
+    risk_model_backend: str = "none"  # "none" | "hosted" | "local" | "semantic"
     local_risk_model_endpoint: str | None = None  # e.g. "http://localhost:11435/api/generate"
 
     # Browser
@@ -84,11 +93,13 @@ def load(env_path: str | None = None) -> Config:
         )
 
     risk_model_backend = os.environ.get("RISK_MODEL_BACKEND", "none").strip().lower()
-    if risk_model_backend not in ("none", "hosted", "local"):
+    if risk_model_backend not in ("none", "hosted", "local", "semantic"):
         raise RuntimeError(
-            f"RISK_MODEL_BACKEND must be 'none', 'hosted', or 'local', got {risk_model_backend!r}. "
-            "'none' (the default) keeps the keyword-only risk_classifier.py/boundary_guard.py floor "
-            "as the sole risk signal -- see eval/README.md before setting this to 'local'."
+            f"RISK_MODEL_BACKEND must be 'none', 'hosted', 'local', or 'semantic', got "
+            f"{risk_model_backend!r}. 'none' (the default) keeps the keyword-only "
+            "risk_classifier.py/boundary_guard.py floor as the sole risk signal -- see "
+            "eval/README.md before setting this to 'local'. 'semantic' needs no endpoint "
+            "and no eval gate (see risk_model_backend.py's SemanticRiskJudge docstring)."
         )
 
     cfg = Config(

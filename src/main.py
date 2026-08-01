@@ -14,7 +14,7 @@ from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
 from src.brain.planner import HostedLLMPlanner, LocalFineTunedPlanner, build_http_generate_fn
 from src.brain.replanner import Replanner
-from src.brain.risk_model_backend import HostedRiskJudge, LocalFineTunedRiskModel
+from src.brain.risk_model_backend import HostedRiskJudge, LocalFineTunedRiskModel, SemanticRiskJudge
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.memory.memory_api import MemoryAPI
@@ -44,6 +44,15 @@ def _build_risk_model_judge(cfg):
     if cfg.risk_model_backend == "hosted":
         generate_fn = HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)._generate_fn
         return HostedRiskJudge(generate_fn=generate_fn).judge
+
+    if cfg.risk_model_backend == "semantic":
+        # Zero-dependency, in-process, no network/GPU/endpoint required --
+        # unlike "hosted"/"local" this needs no eval/README.md deployment
+        # gate before enabling (see SemanticRiskJudge's own docstring for
+        # why: it fails open to "no opinion" exactly like every other
+        # backend here, and it's a same-day improvement over the keyword
+        # floor, not a trained model making opaque decisions).
+        return SemanticRiskJudge().judge
 
     if cfg.risk_model_backend == "local":
         if not cfg.local_risk_model_endpoint:

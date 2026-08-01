@@ -19,6 +19,18 @@ def test_none_backend_returns_no_judge():
     assert _build_risk_model_judge(cfg) is None
 
 
+def test_semantic_backend_builds_a_working_judge_with_no_endpoint_needed():
+    """Phase 6 (2026-08-01): unlike 'hosted'/'local', 'semantic' needs no
+    network/GPU/endpoint config at all -- it's in-process. Confirms the
+    branch actually returns a working judge, not just that it doesn't
+    raise."""
+    cfg = _FakeCfg(risk_model_backend="semantic", local_risk_model_endpoint=None)
+    judge = _build_risk_model_judge(cfg)
+    assert judge is not None
+    result = judge({"action": "click", "description": "get rid of this permanently"})
+    assert result == Risk.DESTRUCTIVE
+
+
 def test_local_backend_without_endpoint_raises():
     cfg = _FakeCfg(risk_model_backend="local", local_risk_model_endpoint=None)
     with pytest.raises(RuntimeError, match="LOCAL_RISK_MODEL_ENDPOINT"):

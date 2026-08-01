@@ -170,6 +170,8 @@ over logged tasks; full trace replay works for any logged task.
 ---
 
 ## Phase 6 — Live-wire the semantic risk layer
+**Status: complete (2026-08-01)**
+
 Goal: connect the semantic risk/boundary layer (`semantic_matcher.py`, `SemanticRiskJudge`,
 `semantic_boundary_match` — added 2026-08-01, currently proven only via
 `eval/adversarial_boundary_eval.py --model semantic`) to the actual live orchestrator, which has no path to

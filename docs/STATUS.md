@@ -9,16 +9,19 @@ line at the bottom when this file changes.
 **Phase: 5 — Hardening, complete. Plus: native Windows GUI (PySide6) added 2026-07-12, ahead of GPU model
 training per the user's stated plan (build the GUI now, train once real usage data exists). Plus
 (2026-08-01): a zero-dependency semantic risk/boundary layer and an offline real-pixel integration harness
-(`tests/integration/`) — the latter immediately found and fixed a genuine OCR bug (see below). Non-GUI
-suite: 195 → 221 tests passing (+26: 18 semantic-layer, 6 real-pixel integration, 2 OCR regression) —
-verified with `python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the
-232-test full-suite figure from 2026-07-13 (which includes the 38 GUI tests) was not re-verified in this
-same environment and should be re-confirmed on a machine with PySide6 installed before being combined with
-the +26 above. Still not yet run live against a real screen/OS/mouse-keyboard/LLM/display on the user's
-actual Windows machine (same blocker throughout this project) — but as of 2026-08-01, real Tesseract OCR
-and real `screen_diff` have now been exercised against real rendered pixels via headless Chromium, which is
-a meaningfully closer proxy than the fully-synthetic data every earlier test used, even though it is not
-yet the full live system.**
+(`tests/integration/`) — the latter immediately found and fixed a genuine OCR bug (see below). Plus
+(2026-08-01, Phase 6 of `docs/PHASES.md`): the semantic layer is now actually live-wired into the
+orchestrator (`RISK_MODEL_BACKEND=semantic` in `config.py`, `_check_boundary()`'s always-on second layer)
+— previously it only ran inside the eval harness. Non-GUI suite: 195 → 229 tests passing (+34: 18
+semantic-layer, 6 real-pixel integration, 2 OCR regression, 8 Phase-6 wiring) — verified with
+`python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the 232-test
+full-suite figure from 2026-07-13 (which includes the 38 GUI tests) was not re-verified in this same
+environment and should be re-confirmed on a machine with PySide6 installed before being combined with the
+above. Still not yet run live against a real screen/OS/mouse-keyboard/LLM/display on the user's actual
+Windows machine (same blocker throughout this project, and the next scheduled item — `docs/PHASES.md`
+Phase 7) — but as of 2026-08-01, real Tesseract OCR and real `screen_diff` have now been exercised against
+real rendered pixels via headless Chromium, which is a meaningfully closer proxy than the fully-synthetic
+data every earlier test used, even though it is not yet the full live system.**
 
 ## Documentation files (`docs/` + root)
 
@@ -35,15 +38,17 @@ yet the full live system.**
 | `docs/WORKFLOW.md` | Complete | |
 | `docs/DEBUG.md` | Complete | |
 | `docs/CODE_LOGIC.md` | Complete | Covers all 19 reviewed repos incl. 2 exclusions; adds `research_router.py` and `LoopAudit` to Phase 4 in `PHASES.md` |
+| `docs/PHASE_7_CHECKLIST.md` | Complete (2026-08-01) | Step-by-step guide for the user's own Phase 7 live run — not executable/verifiable from this build environment |
 
 ## Source files (`src/`) — not yet created
 
 | File | Phase | Status |
 |---|---|---|
-| `src/main.py` | 1.1 | Complete |
-| `src/config.py` | 1.1 | Complete |
+| `src/main.py` | 1.1 (updated Phase 6, 2026-08-01) | Complete (`_build_risk_model_judge` adds `"semantic"` branch — no endpoint needed) |
+| `src/config.py` | 1.1 (updated Phase 6, 2026-08-01) | Complete (`risk_model_backend` accepts `"semantic"`) |
+| `src/doctor.py` | Phase 7 prep (2026-08-01) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer without executing a real task. Not a substitute for Phase 7 itself. |
 | `requirements.txt` | 1.1 | Complete |
-| \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning wired in) |
+| \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4, Phase 6) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning + Phase 6 always-on semantic boundary layer wired in) |
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
 | `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 5 rule-table expansion + read-only guard) |
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
@@ -73,7 +78,7 @@ yet the full live system.**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (non-GUI: 221 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression; see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/` | ongoing | In progress (non-GUI: 240 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression + 8 Phase-6 wiring + 11 doctor tool; see note above re: 38 GUI-only tests not re-verified this session) |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -103,13 +108,14 @@ listed below is what remains, stated plainly rather than glossed over:
   real Windows DPI/multi-monitor scaling behavior, and a real Gemini API call — all still require the
   user's actual Windows machine.
 - **The hard-boundary guard (`boundary_guard.py`) is still keyword/phrase-based as its primary mechanism,
-  now with an additive (not replacing) semantic layer.** `semantic_boundary_match()` in
-  `risk_model_backend.py` (2026-08-01) catches paraphrased boundary-evasion attempts the keyword table
-  misses (`boundary_evasion` eval recall 14% → 71%), but it's still exemplar-similarity matching, not a
-  trained classifier — sufficiently novel phrasing, or an attack crafted specifically against its known
-  exemplar list, could still slip through both layers. Closing this completely would still require a
-  fundamentally different mechanism (a dedicated trained classifier, i.e. Track B), which remains out of
-  scope for this pass.
+  now with an additive (not replacing), live-wired semantic layer (2026-08-01, Phase 6).**
+  `semantic_boundary_match()` in `risk_model_backend.py` now actually runs inside
+  `orchestrator._check_boundary()` on every task, not just in the eval harness — catches paraphrased
+  boundary-evasion attempts the keyword table misses (`boundary_evasion` eval recall 14% → 71%), but it's
+  still exemplar-similarity matching, not a trained classifier — sufficiently novel phrasing, or an attack
+  crafted specifically against its known exemplar list, could still slip through both layers. Closing this
+  completely would still require a fundamentally different mechanism (a dedicated trained classifier, i.e.
+  Track B), which remains out of scope for this pass.
 - **Screenshots and logs are still unencrypted at rest.** Credential-shaped `params` values are now
   redacted before being written (fixed this pass), but full-frame screenshots can still contain
   arbitrary on-screen sensitive content (open messages, visible form fields, etc.), and there is no
@@ -233,3 +239,27 @@ GUI-inclusive figure above was not re-verified this session). Full details in `d
 `docs/DEBUG.md`'s 2026-08-01 entries. Still outstanding, unchanged by this pass: real OS mouse/keyboard
 control, real DPI/multi-monitor scaling, and a real live end-to-end run on the user's actual Windows
 machine.
+
+---
+**Update 2026-08-01 (Phase 6 — semantic layer live-wired):** The semantic layer above previously only ran
+inside `eval/adversarial_boundary_eval.py`; it now actually runs on live task execution. `config.py`'s
+`risk_model_backend` accepts `"semantic"` (no endpoint needed), `main.py` wires it to `SemanticRiskJudge`
+the same way `"hosted"`/`"local"` are wired, and `orchestrator._check_boundary()` now always runs
+`semantic_boundary_match()` as a second layer after the keyword `boundary_guard.check()` — additive only,
+logged with `detected_by: "keyword" | "semantic"` so either layer's catch is auditable. Non-GUI suite:
+221 → 229 tests passing (+8, covering the new config value, the new builder branch, and two orchestrator-
+level proofs that the boundary layer both catches what keyword misses and doesn't double-fire when keyword
+already caught something). Full details in `docs/DECISIONS.md`'s 2026-08-01 Phase 6 entry;
+`docs/PHASES.md`'s Phase 6 marked complete. Phase 7 (first real live validation on Windows) is next and
+unchanged by this pass — none of this wiring has been exercised against a real Gemini call or real
+confirmation dialog yet, only mocks.
+
+---
+**Update 2026-08-01 (Phase 7 prep — not the live run itself):** Added `python -m src.doctor`, a pre-flight
+diagnostic checking every Phase 7 environment prerequisite (Tesseract on PATH, Playwright Chromium
+launches, config/API key loads, writable dirs, Phase 6's semantic layer) without executing a real task —
+and `docs/PHASE_7_CHECKLIST.md`, the ordered step-by-step sequence for the user's own live run (doctor tool
+→ verify the real Chrome profile per the 2026-07-13 profile-bug lesson → browser-only task first →
+desktop-target-type task → capture the trace log → report back). Non-GUI suite: 229 → 240 tests passing.
+**Phase 7 itself remains not done** — this only prepares for it; the actual live run requires the user's
+Windows machine and cannot be completed or verified here.

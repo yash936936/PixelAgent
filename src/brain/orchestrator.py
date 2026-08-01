@@ -33,10 +33,11 @@ from pathlib import Path
 from src.action.action_router import ActionRouter
 from src.action.mouse_keyboard import MouseKeyboard
 from src.brain import boundary_guard
-from src.brain.boundary_guard import BoundaryBlocked
+from src.brain.boundary_guard import Boundary, BoundaryBlocked, BoundaryViolation
 from src.brain.planner import PlannerBackend
 from src.brain.replanner import ReplanExhausted, Replanner
 from src.brain.risk_classifier import Risk, RiskClassifier
+from src.brain.risk_model_backend import semantic_boundary_match
 from src.confirmation.gate import ConfirmationGate, GateContext, GateDecision
 from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger
@@ -264,7 +265,23 @@ class Orchestrator:
         the caller does not catch alongside ordinary execution errors --
         a tripped hard boundary halts the task outright rather than being
         offered to the confirmation gate, since it's non-negotiable, not
-        just another risk tier a user could approve past."""
+        just another risk tier a user could approve past.
+
+        Phase 6 (2026-08-01): also runs `semantic_boundary_match()` as a
+        second, additive layer -- catches paraphrased boundary-evasion
+        attempts the keyword table misses by construction (eval recall on
+        `boundary_evasion` went 14% -> 71% with this layer, see
+        docs/DECISIONS.md's 2026-08-01 entry). This is always on, same as
+        the keyword check above, and cannot be disabled by config -- a
+        hard boundary is non-negotiable, so there's no config knob for
+        either layer that enforces it. It never overrides or downgrades
+        the keyword layer's verdict (if the keyword check already found a
+        violation, this method has already returned/raised above and the
+        semantic layer is never even consulted); it only adds new stops
+        the keyword layer alone would have missed. Both layers' verdicts
+        are logged so a reviewer can see which one actually caught a given
+        case.
+        """
         violation = boundary_guard.check(step)
         if violation is not None:
             self._logger.log_event(
@@ -273,10 +290,31 @@ class Orchestrator:
                     "status": "hard_boundary_blocked",
                     "boundary": violation.boundary.value,
                     "matched_phrase": violation.matched_phrase,
+                    "detected_by": "keyword",
                     "step": step,
                 },
             )
             raise BoundaryBlocked(violation)
+
+        semantic_match = semantic_boundary_match(step)
+        if semantic_match is not None:
+            label, score, exemplar = semantic_match
+            semantic_violation = BoundaryViolation(
+                boundary=Boundary(label),
+                matched_phrase=f"[semantic match, score={score:.2f}, closest exemplar: {exemplar!r}]",
+            )
+            self._logger.log_event(
+                step_num,
+                {
+                    "status": "hard_boundary_blocked",
+                    "boundary": semantic_violation.boundary.value,
+                    "matched_phrase": semantic_violation.matched_phrase,
+                    "detected_by": "semantic",
+                    "semantic_score": score,
+                    "step": step,
+                },
+            )
+            raise BoundaryBlocked(semantic_violation)
 
     def _classify_risk(self, step_num: int, step: dict) -> Risk:
         """Keyword classification, with an LLM second opinion consulted

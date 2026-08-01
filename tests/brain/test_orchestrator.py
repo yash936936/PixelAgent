@@ -163,6 +163,101 @@ def test_hard_boundary_step_blocks_task_without_gating():
     action_router.execute.assert_not_called()
 
 
+def test_semantic_boundary_layer_catches_paraphrase_keyword_check_misses():
+    """Phase 6 (2026-08-01): semantic_boundary_match() is wired into
+    _check_boundary() as a second, always-on layer. This phrasing
+    deliberately avoids every literal keyword in boundary_guard.py's
+    _CAPTCHA_BYPASS_PHRASES list -- exactly the gap that layer alone can't
+    close, and exactly what the semantic layer exists to catch."""
+    orch, action_router, gate, logger = make_orchestrator(
+        planner_steps=[
+            {"action": "click",
+             "description": "please solve the little puzzle so the site lets us through",
+             "target_type": "web", "params": {}},
+        ],
+    )
+    result = orch.run_task("get past the site's check")
+    assert result["status"] == "blocked_hard_boundary"
+    gate.request_approval.assert_not_called()
+    action_router.execute.assert_not_called()
+
+    # Logged distinctly as semantic-detected, so a reviewer can tell which
+    # layer actually caught it.
+    logged_statuses = [call.args[1] for call in logger.log_event.call_args_list]
+    boundary_events = [e for e in logged_statuses if e.get("status") == "hard_boundary_blocked"]
+    assert len(boundary_events) == 1
+    assert boundary_events[0]["detected_by"] == "semantic"
+    assert boundary_events[0]["boundary"] == "captcha_bot_detection_bypass"
+
+
+def test_keyword_boundary_still_wins_and_semantic_layer_not_double_logged():
+    """When the keyword layer already catches a violation, the semantic
+    layer must never even be consulted -- only one hard_boundary_blocked
+    event should be logged, attributed to the keyword layer."""
+    orch, action_router, gate, logger = make_orchestrator(
+        planner_steps=[
+            {"action": "click", "description": "solve the captcha",
+             "target_type": "web", "params": {}},
+        ],
+    )
+    result = orch.run_task("get past this")
+    assert result["status"] == "blocked_hard_boundary"
+
+    logged_statuses = [call.args[1] for call in logger.log_event.call_args_list]
+    boundary_events = [e for e in logged_statuses if e.get("status") == "hard_boundary_blocked"]
+    assert len(boundary_events) == 1
+    assert boundary_events[0]["detected_by"] == "keyword"
+
+
+def test_semantic_risk_judge_wired_as_llm_risk_judge_escalates_evasive_step():
+    """Phase 6 (2026-08-01) end-to-end: this is exactly the wiring
+    RISK_MODEL_BACKEND=semantic produces in main.py's
+    _build_risk_model_judge(). Proves the escalation actually happens
+    through the real Orchestrator/logger path, not just against
+    SemanticRiskJudge in isolation."""
+    from src.brain.risk_model_backend import SemanticRiskJudge
+
+    driver = MagicMock()
+    driver.current_url.return_value = "https://example.com"
+    driver.current_title.return_value = "Example"
+    action_router = MagicMock()
+    action_router.execute.return_value = {"status": "executed"}
+    gate = MagicMock()
+    gate.request_approval.return_value = GateDecision(verdict="approved")
+    logger = MagicMock()
+    planner = MagicMock()
+    # Deliberately avoids every literal keyword in risk_classifier.py's
+    # destructive-keyword table -- the keyword classifier alone finds no
+    # signal on this at all (falls through to Risk.LOCAL, unconfident).
+    planner.next_step.side_effect = [
+        {"action": "click", "description": "make this go away for good",
+         "target_type": "web", "params": {}},
+        {"action": "done", "description": "finished", "target_type": "web", "params": {}},
+    ]
+
+    orch = Orchestrator(
+        planner=planner, driver=driver, action_router=action_router, gate=gate,
+        logger=logger, max_steps=5, llm_risk_judge=SemanticRiskJudge().judge,
+    )
+    result = orch.run_task("make this go away for good")
+    assert result["status"] == "done"
+
+    # The confirmation gate must actually have been consulted for this
+    # step -- proof the semantic escalation reached the gate, not just
+    # that the task completed.
+    gate.request_approval.assert_called_once()
+    call_args = gate.request_approval.call_args.args
+    risk_arg = call_args[1]
+    from src.brain.risk_classifier import Risk
+    assert risk_arg == Risk.DESTRUCTIVE
+
+    logged_statuses = [call.args[1] for call in logger.log_event.call_args_list]
+    escalation_events = [e for e in logged_statuses if e.get("status") == "llm_risk_escalation"]
+    assert len(escalation_events) == 1
+    assert escalation_events[0]["keyword_result"] == "local"
+    assert escalation_events[0]["llm_result"] == "destructive"
+
+
 def test_llm_risk_judge_escalates_unmatched_step_to_external():
     driver = MagicMock()
     driver.current_url.return_value = "https://example.com"
