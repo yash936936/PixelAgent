@@ -320,3 +320,42 @@ Append to the bottom of this file after each pass:
 - Result: **Pass.** This entry exists specifically because a live run found something 232 passing unit
   tests could not — worth keeping as a concrete example in this protocol of why "all tests green" isn't
   the same as "verified against the real external system."
+
+### [2026-08-01] Debug pass — real-pixel integration harness finds a genuine OCR bug on first run
+- Files checked: `src/perception/ocr.py`, `src/perception/element_detector.py`, `src/perception/screen_diff.py`,
+  plus new `tests/integration/` fixtures and tests.
+- Issues found:
+  1. **A real bug, found by the new offline real-pixel harness (`tests/integration/`), not a live Windows
+     run.** `test_real_ocr_pipeline.py` — real headless Chromium render, real screenshot, real Tesseract —
+     failed immediately: Tesseract returned zero words on a standard solid-blue "Submit" button with white
+     text, finding only the plain black-on-white "Username:" label next to it. Every prior test in this
+     project exercised `OCREngine` against hand-built `OCRWord` lists, so this exact failure mode had never
+     been triggered before. Isolated the cause by cropping just the button out of the screenshot and testing
+     it alone: an inverted, upscaled copy of the *same crop* still failed identically, which ruled out
+     color-contrast and resolution as the cause. Root cause: Tesseract's `textord` layout-analysis pass,
+     which decides what regions are worth reading before OCR even runs, treats a large solid-color rectangle
+     as a non-text "picture" block and discards it — a heuristic tuned for scanned documents that misfires on
+     ordinary UI elements (solid buttons, colored panels, dark-mode surfaces) regardless of what's drawn on
+     them. Fixed with `-c textord_min_linesize=1.0` passed to every `pytesseract.image_to_data` call in
+     `ocr.py` — verified this alone finds both the label and the button text, at original resolution, default
+     page-segmentation mode, no other changes needed. Added
+     `tests/perception/test_ocr_solid_background_regression.py`, a fast mock-free test against a small
+     synthetically-drawn solid-button image, so this specific regression can never silently return without a
+     visible test failure — it doesn't require Playwright/Chromium, unlike the fuller integration tier that
+     originally found it.
+  2. Also added, alongside the fix: `test_real_click_that_changes_the_page_is_detected` (true-positive check
+     that a real, large visible UI change is correctly flagged by `screen_diff.compare()`) and
+     `test_real_blinking_cursor_animation_false_positive_risk` (characterizes, rather than assumes, the false-
+     positive risk of a small CSS blink animation — measured `change_ratio≈0.00009` against the default 0.01
+     threshold, well clear of it; printed rather than silently asserted, so a human reviewer can see the
+     actual number if the threshold is ever revisited for text-entry-heavy screens).
+- Issues NOT fixed (external blockers, unchanged): real OS-level mouse/keyboard control, real DPI/multi-
+  monitor scaling behavior, and a real Gemini API call all still require the user's actual Windows machine —
+  this harness only closes the perception-pipeline half of "zero live validation," not the full end-to-end
+  claim.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 221/221 passed (213 previous + 6 new real-pixel
+  integration tests + 2 new OCR regression tests); `python -m eval.adversarial_boundary_eval --model
+  semantic` — 73% overall (see `eval/README.md`'s 2026-08-01 update for the full per-category breakdown).
+- Result: **Pass**, with one real, previously-undiscovered bug found and fixed as a direct result of this
+  pass's own harness — the second time in this project's history (after the 2026-07-13 profile-launch bug)
+  that testing against something more real than a mock has surfaced a bug unit tests alone could not.

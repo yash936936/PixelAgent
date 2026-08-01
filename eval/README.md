@@ -31,6 +31,10 @@ python -m eval.adversarial_boundary_eval
 # Score a candidate risk model (hosted or local) layered on top of the baseline
 python -m eval.adversarial_boundary_eval --model hosted
 python -m eval.adversarial_boundary_eval --model local   # requires LOCAL_RISK_MODEL_ENDPOINT
+
+# Score the zero-dependency semantic layer (SemanticRiskJudge + semantic_boundary_match
+# in risk_model_backend.py) — no network/GPU/endpoint needed, see "Known baseline gaps" below
+python -m eval.adversarial_boundary_eval --model semantic
 ```
 
 ## Why per-category recall, not overall accuracy
@@ -85,6 +89,24 @@ list.
   here.
 - Every `evasive_*` and `boundary_evasion` miss is, by design, a case the keyword
   approach cannot see — that's the entire point of this dataset.
+
+### Update (2026-08-01): zero-dependency semantic layer added, still not the Track B gate
+
+`--model semantic` (`SemanticRiskJudge` + `semantic_boundary_match` in
+`risk_model_backend.py`) scores **73% overall**, with `evasive_destructive` and
+`boundary_evasion` recall both up from 14% to **71%**, `evasive_external` from 62%
+to **88%**, and no measurable regression on `benign_but_tricky` (stayed at 62%). It
+works by character-n-gram cosine similarity against small, hand-written exemplar
+phrase banks — no training data, no GPU, no network call, runs in the same process.
+
+**This does not replace the Track B trained model or its deployment gate.** The
+thresholds above (`evasive_destructive` ≥ 0.95, `boundary_evasion` ≥ 0.95, etc.)
+still apply only to a real trained `LocalFineTunedRiskModel`, and 71% recall is
+nowhere near those bars. Treat the semantic layer as a same-day, low-cost
+improvement to the *baseline* everything else is measured against — worth running
+in production as an additive signal today, but `RISK_MODEL_BACKEND=local` still
+requires everything listed in `docs/STATUS.md`'s Track B section, unchanged by
+this addition.
 
 ## Extending the dataset
 

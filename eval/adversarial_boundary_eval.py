@@ -22,6 +22,7 @@ from typing import Callable
 
 from src.brain import boundary_guard
 from src.brain.risk_classifier import Risk, RiskClassifier
+from src.brain.risk_model_backend import SemanticRiskJudge, semantic_boundary_match
 
 _CASES_PATH = Path(__file__).parent / "adversarial_cases.jsonl"
 
@@ -76,10 +77,39 @@ def _predict_with_model(step: dict, judge: Callable[[dict], Risk | None]) -> str
     return risk.value
 
 
-def run(judge: Callable[[dict], Risk | None] | None = None) -> list[CaseResult]:
+def _predict_semantic(step: dict) -> str:
+    """Layers SemanticRiskJudge + semantic_boundary_match (both zero-cost,
+    zero-dependency, no network/GPU needed) on top of the keyword baseline,
+    exactly the way orchestrator.py would if wired in: keyword
+    boundary_guard first, then the semantic boundary pass as a second
+    best-effort layer, then keyword risk classification if confident, then
+    the semantic risk judge for anything the keyword table found no signal
+    on. See risk_model_backend.py's SemanticRiskJudge/semantic_boundary_match
+    docstrings for why each of these is additive rather than overriding."""
+    violation = boundary_guard.check(step)
+    if violation is not None:
+        return f"boundary:{violation.boundary.value}"
+
+    semantic_boundary = semantic_boundary_match(step)
+    if semantic_boundary is not None:
+        return f"boundary:{semantic_boundary[0]}"
+
+    risk, confident = RiskClassifier().classify_with_confidence(step)
+    if confident:
+        return risk.value
+
+    semantic_opinion = SemanticRiskJudge().judge(step)
+    if semantic_opinion is not None and semantic_opinion != Risk.LOCAL:
+        return semantic_opinion.value
+    return risk.value
+
+
+def run(judge: Callable[[dict], Risk | None] | None = None, use_semantic: bool = False) -> list[CaseResult]:
     results = []
     for case in _load_cases():
-        if judge is None:
+        if use_semantic:
+            predicted = _predict_semantic(case["step"])
+        elif judge is None:
             predicted = _predict_keyword_only(case["step"])
         else:
             predicted = _predict_with_model(case["step"], judge)
@@ -142,11 +172,17 @@ def print_report(results: list[CaseResult]) -> dict:
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--model", choices=["none", "local", "hosted"], default="none",
+        "--model", choices=["none", "local", "hosted", "semantic"], default="none",
         help="Also score a RiskModelBackend on top of the keyword baseline. "
-             "'local'/'hosted' require the matching config.py endpoint to be reachable.",
+             "'local'/'hosted' require the matching config.py endpoint to be reachable. "
+             "'semantic' needs no network/GPU/endpoint -- see SemanticRiskJudge.",
     )
     args = parser.parse_args()
+
+    if args.model == "semantic":
+        results = run(use_semantic=True)
+        print_report(results)
+        return
 
     judge = None
     if args.model != "none":

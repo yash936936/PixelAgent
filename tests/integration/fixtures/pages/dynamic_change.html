@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 40px; font-family: Arial, sans-serif; background: #ffffff; }
+  #panel { width: 300px; height: 150px; background: #eeeeee; }
+  #panel.open { background: #2d6cdf; }
+  #toggle-btn { font-size: 18px; padding: 10px 20px; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+  <button id="toggle-btn" onclick="document.getElementById('panel').classList.add('open')">
+    Open Panel
+  </button>
+  <div id="panel"></div>
+</body>
+</html>

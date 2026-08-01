@@ -466,3 +466,69 @@ Phase 3 build
   why `docs/STATUS.md` has consistently flagged "zero live task runs" as the single biggest blocker: this
   exact class of bug (correct-looking code that's wrong about an external system's actual behavior) cannot
   be caught any other way.
+
+### [2026-08-01] Zero-dependency semantic risk/boundary layer + real-pixel integration harness + real OCR bug found and fixed
+- **Type:** New (multiple) + Overwrite (`src/perception/ocr.py`)
+- **File(s) affected:** `src/brain/semantic_matcher.py` (new), `src/brain/risk_model_backend.py` (updated —
+  adds `SemanticRiskJudge`, `semantic_boundary_match`), `eval/adversarial_boundary_eval.py` (updated —
+  adds `--model semantic`), `eval/README.md` (updated), `src/perception/ocr.py` (overwritten — bug fix),
+  `tests/brain/test_semantic_matcher.py` (new), `tests/brain/test_semantic_risk_judge.py` (new),
+  `tests/perception/test_ocr_solid_background_regression.py` (new), `tests/integration/` (new: `conftest.py`,
+  `test_real_ocr_pipeline.py`, `test_real_screen_diff.py`, `fixtures/pages/*.html`).
+- **What changed:**
+  1. **Semantic risk/boundary layer.** `risk_classifier.py`/`boundary_guard.py` are keyword/substring
+     matchers, and `eval/adversarial_boundary_eval.py` already proved the resulting gap: ~40% overall,
+     14% recall on `evasive_destructive`/`boundary_evasion` specifically — exactly the categories
+     phrased to avoid every literal keyword by construction. Rather than wait for Track B's trained
+     model (blocked on a GPU and real usage data, per `docs/STATUS.md`), added a same-day intermediate:
+     `semantic_matcher.py` implements dependency-free character-n-gram cosine similarity (no numpy,
+     no embedding model download, no network call), and `risk_model_backend.py`'s new
+     `SemanticRiskJudge`/`semantic_boundary_match` score a step's text against small, hand-written
+     exemplar phrase banks — deliberately written independently of `eval/adversarial_cases.jsonl` so
+     the eval isn't cheated. Result on the adversarial eval: 40% → 73% overall,
+     `evasive_destructive`/`boundary_evasion` recall 14% → 71% each, `evasive_external` 62% → 88%,
+     `benign_but_tricky` unchanged at 62% (verified no regression after adding a read-only-framing
+     guard mirrored from `risk_classifier.py`'s own guard, since the raw semantic layer initially
+     introduced a false positive on "check if the delete button exists"-style inspection phrasing).
+     Both new classes fail open (return `None`/no opinion below threshold) — same contract as
+     `HostedRiskJudge`/`LocalFineTunedRiskModel` — and are explicitly documented as NOT a replacement
+     for Track B's eventual trained model or its deployment gate (see `eval/README.md`'s 2026-08-01
+     update).
+  2. **Real-pixel integration test harness (`tests/integration/`).** Every one of this project's 213
+     unit tests exercises `OCREngine`/`element_detector`/`screen_diff` against synthetic, hand-built
+     data (`OCRWord` lists constructed by hand, solid-color `PIL.Image` objects) — `docs/STATUS.md` has
+     flagged "zero live validation" as the single biggest blocker since Phase 5. Rather than wait for
+     the user's real Windows machine, added an offline-but-real proxy: local HTML fixture pages
+     (`tests/integration/fixtures/pages/`) rendered by a real headless Chromium via Playwright, real
+     screenshots piped through the real Tesseract binary and real `screen_diff.compare()` — no mocks
+     anywhere in that chain. Mirrors the existing `tests/gui/` convention of a tier that needs an
+     optional dependency (`pytest --ignore=tests/integration` if Playwright/Tesseract aren't
+     available).
+  3. **Real bug found by the harness above, on its very first run — not a hypothetical, an actual
+     failure.** `test_real_ocr_pipeline.py` failed immediately: Tesseract found zero words at all on a
+     standard solid-blue "Submit" button with white text, an extremely common real-UI pattern that no
+     prior test could have caught since none exercised the real Tesseract binary. Root cause, confirmed
+     by isolating a crop of just the button (an inverted, upscaled crop still failed identically at the
+     full-page level): it was not a color-contrast problem, it was Tesseract's `textord` layout-analysis
+     pass discarding the solid-color rectangle as a non-text "picture" block *before* OCR runs, a
+     document-scanning heuristic that misfires on real UI screenshots (solid buttons, colored panels,
+     dark-mode surfaces) regardless of what text is drawn on them. Fixed with a single Tesseract config
+     parameter, `-c textord_min_linesize=1.0`, verified empirically to find both the label and the
+     button text with no changes needed to image scale, color inversion, or page-segmentation mode.
+     Added `tests/perception/test_ocr_solid_background_regression.py` — a fast, mock-free regression
+     test using a small synthetically-drawn solid-button image (no Playwright/Chromium needed) that pins
+     this specific bug down permanently.
+- **Why:** Continuation of the independent architectural review from earlier in this session (drawbacks/
+  gaps discussion) — the two highest-leverage, same-day-feasible items identified were (a) closing some of
+  the keyword-classifier evasion gap without waiting on GPU training, and (b) proving the perception layer
+  against real pixels instead of only synthetic data, precisely because "zero live validation" had been an
+  open, honestly-documented blocker for this entire project's history.
+- **Impacts:** 213 → 221 tests passing (18 new for the semantic layer, 6 new real-pixel integration tests,
+  2 new OCR regression tests). `docs/STATUS.md`'s "zero live validation" known gap is now partially closed
+  — real Tesseract OCR and real `screen_diff` have been exercised against real rendered pixels for the
+  first time in this project's history, and it immediately surfaced a genuine bug. What remains unproven:
+  real OS-level mouse/keyboard control, real DPI/multi-monitor scaling, and a real Gemini API call — all
+  still require the user's actual Windows machine, unchanged by this pass. `docs/PHASES.md` intentionally
+  not restructured — this work follows the same convention as the earlier GUI/Track-B additions (tracked
+  in `STATUS.md`/`DECISIONS.md` directly rather than inserted as a new numbered phase in a doc meant to
+  define file structure ahead of implementation).

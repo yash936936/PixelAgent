@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 40px; font-family: Arial, sans-serif; background: #ffffff; }
+  #submit-btn {
+    font-size: 20px;
+    padding: 12px 28px;
+    background: #2d6cdf;
+    color: white;
+    border: none;
+    border-radius: 4px;
+  }
+  #username-label { font-size: 18px; display: block; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+  <span id="username-label">Username:</span>
+  <button id="submit-btn" onclick="document.getElementById('result').innerText='Submitted!'">Submit</button>
+  <p id="result"></p>
+</body>
+</html>

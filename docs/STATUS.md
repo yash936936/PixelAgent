@@ -7,11 +7,18 @@ line at the bottom when this file changes.
 
 ## Overall progress
 **Phase: 5 — Hardening, complete. Plus: native Windows GUI (PySide6) added 2026-07-12, ahead of GPU model
-training per the user's stated plan (build the GUI now, train once real usage data exists). 232 tests
-passing total. Still not yet run live against a real screen/OS/LLM/display (same blocker throughout this
-project — requires the user's actual Windows machine, real logs from live runs, and the Tesseract binary;
-this session additionally verified via a clean venv + exact pinned installs + offscreen-Qt testing that
-everything up to that point works, rather than taking prior claims on faith).**
+training per the user's stated plan (build the GUI now, train once real usage data exists). Plus
+(2026-08-01): a zero-dependency semantic risk/boundary layer and an offline real-pixel integration harness
+(`tests/integration/`) — the latter immediately found and fixed a genuine OCR bug (see below). Non-GUI
+suite: 195 → 221 tests passing (+26: 18 semantic-layer, 6 real-pixel integration, 2 OCR regression) —
+verified with `python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the
+232-test full-suite figure from 2026-07-13 (which includes the 38 GUI tests) was not re-verified in this
+same environment and should be re-confirmed on a machine with PySide6 installed before being combined with
+the +26 above. Still not yet run live against a real screen/OS/mouse-keyboard/LLM/display on the user's
+actual Windows machine (same blocker throughout this project) — but as of 2026-08-01, real Tesseract OCR
+and real `screen_diff` have now been exercised against real rendered pixels via headless Chromium, which is
+a meaningfully closer proxy than the fully-synthetic data every earlier test used, even though it is not
+yet the full live system.**
 
 ## Documentation files (`docs/` + root)
 
@@ -47,13 +54,14 @@ everything up to that point works, rather than taking prior claims on faith).**
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
 | `src/observability/logger.py` | 1.5 (updated Phase 4) | Complete (LoopAudit + log_event, llm_call accuracy) |
 | `src/observability/trace_replay.py` | 5 | Complete |
-| \`src/perception/ocr.py\` | 2.1 | Complete |
+| \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
 | `src/memory/episodic_store.py` | 3.1 (updated Phase 4) | Complete (edited flag + flagged_for_review) |
 | `src/memory/semantic_store.py` | 3.2 | Complete |
 | `src/memory/memory_api.py` | 3.2 (updated Phase 4) | Complete |
 | `src/brain/research_router.py` | 4.1 | Complete |
+| `src/brain/semantic_matcher.py` | Improvement pass (2026-08-01) | Complete (dependency-free char-n-gram cosine similarity, backs `SemanticRiskJudge`/`semantic_boundary_match`) |
 | `src/gui/style.py` | GUI (2026-07-12) | Complete |
 | `src/gui/app.py` | GUI (2026-07-12) | Complete |
 | `src/gui/main_window.py` | GUI (2026-07-12) | Complete (full dashboard: composer + trace + stats + memory) |
@@ -65,7 +73,8 @@ everything up to that point works, rather than taking prior claims on faith).**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (232 tests passing: 189 Phases 1-5 + 38 GUI/memory-facade + 5 new playwright_driver/stats_panel) |
+| `tests/` | ongoing | In progress (non-GUI: 221 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression; see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
 - Live end-to-end run (real screen capture, real Tesseract OCR, real mouse/keyboard control, real Gemini
@@ -75,24 +84,32 @@ everything up to that point works, rather than taking prior claims on faith).**
   difflib threshold in `episodic_store.py`) and the new `corrections:<action>` semantic-memory namespace
   have only been validated against unit-test phrasing/edits — real usage logs from Phase 5 hardening may
   warrant retuning both. `LocalPlanner`/`build_http_generate_fn` are wired in but untested against a real
-  local model server (no such server available in this build environment).
+  local model server (no such server available in this build environment). **(2026-08-01 update:** real
+  Tesseract OCR and real `screen_diff` are no longer purely-mocked-only — see `tests/integration/` and the
+  Known gaps section below — but real mouse/keyboard control, real DPI/multi-monitor scaling, and a real
+  Gemini API call remain unverified in any environment to date.)
 
 ## Known gaps (honest remainder after the 2026-07-12 remediation pass)
 This project underwent an independent line-by-line gap review, and every concretely fixable issue found
 was fixed and tested (see `docs/DECISIONS.md` and `docs/DEBUG.md` entries dated 2026-07-12). What's
 listed below is what remains, stated plainly rather than glossed over:
 
-- **Zero live validation, still.** Every one of the 165 passing tests runs against mocks. No real
-  Playwright browser, real Tesseract OCR, real mouse/keyboard, or real Gemini call has ever executed in
-  this project's history. OCR accuracy, click-coordinate precision, `screen_diff.py`'s real-world false-
-  positive/negative rate, and basic timing/race conditions are all genuinely unknown until run on real
-  hardware.
-- **The hard-boundary guard (`boundary_guard.py`) is still keyword/phrase-based**, same class of
-  mechanism as `risk_classifier.py`. It is a real, independent, non-gateable second layer now (a
-  meaningful improvement over relying on the planner LLM's own judgment alone), but it is not a
-  guarantee — sufficiently novel phrasing, or a prompt-injection attack crafted specifically against its
-  known phrase list, could still slip through. Closing this completely would require a fundamentally
-  different mechanism (e.g. a dedicated classifier model), which is out of scope for this pass.
+- **Zero live validation against the real OS/display — still true; perception-layer validation against
+  real pixels is now partially closed (2026-08-01).** `tests/integration/` now runs real Tesseract OCR and
+  real `screen_diff.compare()` against real headless-Chromium screenshots, and it immediately found and
+  fixed a genuine bug (Tesseract's `textord` layout analysis was discarding solid-color button blocks as
+  non-text before OCR ran — see `docs/DECISIONS.md`/`docs/DEBUG.md` 2026-08-01 entries). What this does
+  NOT cover, still fully unknown: real OS-level mouse/keyboard control and click-coordinate precision,
+  real Windows DPI/multi-monitor scaling behavior, and a real Gemini API call — all still require the
+  user's actual Windows machine.
+- **The hard-boundary guard (`boundary_guard.py`) is still keyword/phrase-based as its primary mechanism,
+  now with an additive (not replacing) semantic layer.** `semantic_boundary_match()` in
+  `risk_model_backend.py` (2026-08-01) catches paraphrased boundary-evasion attempts the keyword table
+  misses (`boundary_evasion` eval recall 14% → 71%), but it's still exemplar-similarity matching, not a
+  trained classifier — sufficiently novel phrasing, or an attack crafted specifically against its known
+  exemplar list, could still slip through both layers. Closing this completely would still require a
+  fundamentally different mechanism (a dedicated trained classifier, i.e. Track B), which remains out of
+  scope for this pass.
 - **Screenshots and logs are still unencrypted at rest.** Credential-shaped `params` values are now
   redacted before being written (fixed this pass), but full-frame screenshots can still contain
   arbitrary on-screen sensitive content (open messages, visible form fields, etc.), and there is no
@@ -128,6 +145,15 @@ accuracy, with `evasive_destructive` and `boundary_evasion` recall in the 14% ra
 the expected, honest starting point — see `eval/README.md`'s "Known baseline gaps" section — and is the
 actual justification for training `LocalFineTunedRiskModel`, not a problem to solve by adding more
 keywords to `risk_classifier.py`.
+
+**Update (2026-08-01):** a zero-dependency semantic layer (`SemanticRiskJudge`/`semantic_boundary_match`
+in `risk_model_backend.py`, scored via `python -m eval.adversarial_boundary_eval --model semantic`) now
+scores 73% overall, 71% on `evasive_destructive`/`boundary_evasion` each, with no change to
+`benign_but_tricky`'s false-positive rate. This is a real, same-day, zero-cost improvement to the baseline
+everything else in this table is measured against — **it does not satisfy the deployment gate below or
+replace the need to train `LocalFineTunedRiskModel`.** 71% recall on the two highest-stakes categories is
+nowhere near the ≥0.95 thresholds in `eval/README.md`; see that file's 2026-08-01 update for the full
+breakdown and the explicit statement of what this addition does and doesn't change.
 
 **Nothing may be set to `RISK_MODEL_BACKEND=local` in a live `.env` until:**
 1. A real model has actually been trained (`training/train_lora.py` run on real hardware with real data).
@@ -192,3 +218,18 @@ one (root cause: `user_data_dir` was built as `profiles_dir/profile_name` instea
 launch arguments — the first test in this project to actually verify what gets passed to Chromium, rather
 than mocking one layer above it. Also removed the "Est. cost" card from the GUI's Loop Audit panel per
 user request (still tracked internally, just not displayed). 232 tests passing total.
+
+---
+**Update 2026-08-01 (semantic layer + real-pixel harness):** Added a zero-dependency, char-n-gram-based
+semantic risk/boundary layer (`src/brain/semantic_matcher.py`, `SemanticRiskJudge`/`semantic_boundary_match`
+in `risk_model_backend.py`) that raises the adversarial eval from 40% to 73% overall without any training
+data or GPU — explicitly not a substitute for Track B's trained model or its deployment gate, see
+`eval/README.md`. Also added `tests/integration/`, this project's first tier to exercise real Tesseract OCR
+and real `screen_diff` against real headless-Chromium screenshots instead of synthetic data — it found and
+fixed a genuine bug on its first run (Tesseract's layout analysis discarding solid-color button blocks as
+non-text before OCR ran; fixed with `-c textord_min_linesize=1.0` in `ocr.py`). Non-GUI suite: 195 → 221
+tests passing (verified with `pytest --ignore=tests/gui` in a build environment without PySide6; the 232
+GUI-inclusive figure above was not re-verified this session). Full details in `docs/DECISIONS.md` and
+`docs/DEBUG.md`'s 2026-08-01 entries. Still outstanding, unchanged by this pass: real OS mouse/keyboard
+control, real DPI/multi-monitor scaling, and a real live end-to-end run on the user's actual Windows
+machine.
