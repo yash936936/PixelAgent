@@ -595,3 +595,226 @@ Phase 3 build
   7 itself is NOT complete — this entry only records the preparation for it. The actual live run, and
   everything Phase 7's success criterion requires, still needs to happen on the user's machine and be
   reported back before `docs/PHASES.md`'s Phase 7 can be marked complete.
+
+### [2026-08-01] TESSERACT_CMD env var wired through — real gap found by the doctor tool's first real use
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/config.py`, `src/main.py`, `src/doctor.py`, `.env.example`,
+  `tests/test_config.py`, `tests/test_doctor.py`.
+- **What changed:** The doctor tool (added earlier today) was run for the first time on the user's real
+  Windows machine and immediately found a genuine, real environment gap: Tesseract is installed but not on
+  PATH — and `OCREngine()` in `main.py` had no way to point at it directly; `tesseract_cmd` existed as a
+  constructor parameter but nothing in `config.py`/`main.py` ever passed a value into it, so the only fix
+  available before this was editing PATH. Added `TESSERACT_CMD` as a proper config option:
+  `config.py`'s `Config.tesseract_cmd` (defaults to `None`, unchanged PATH-reliant behavior),
+  `main.py`'s `_build_desktop_backends()` now takes `cfg` and passes `cfg.tesseract_cmd` through to
+  `OCREngine(tesseract_cmd=...)`, and `src/doctor.py`'s `check_tesseract()` now checks the same
+  `TESSERACT_CMD` value the real run would use, rather than only ever checking PATH — so the doctor tool
+  and the actual app now agree on what "working" means. `.env.example` documents the new variable with the
+  typical Windows install path.
+- **Why:** Direct result of using the Phase 7 prep tooling for its actual intended purpose — the doctor
+  tool caught exactly the kind of environment-setup problem it was built to catch, on its very first real
+  run, and the fix it pointed toward (`OCREngine(tesseract_cmd=...)`) didn't actually exist as a usable
+  config path yet. Fixed immediately rather than just telling the user to edit their system PATH.
+- **Impacts:** 240 → 244 tests passing (+4: default-is-None, value-is-loaded-when-set in `test_config.py`;
+  explicit-path-success and explicit-path-failure-hint in `test_doctor.py`). This is still Phase 7 prep,
+  not Phase 7 itself — the user has not yet completed a live task run; this entry exists because it's a
+  real code gap found and fixed, following the same standard as every other entry in this log.
+
+### [2026-08-01] Phase 7 — first real live runs, two real bugs found and fixed
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/brain/planner.py`, `src/action/action_router.py`,
+  `tests/brain/test_planner.py`, `tests/action/test_action_router.py`.
+- **What changed:** The user completed the first real live task runs in this project's history (browser
+  task and desktop task, per `docs/PHASE_7_CHECKLIST.md`) and hit two genuine, previously-invisible bugs —
+  neither could have been caught by any mock, exactly as expected for the first phase run against real
+  hardware:
+  1. **Browser task crashed the whole process on a truncated Gemini response.** `_parse_step()` correctly
+     rejected malformed JSON (missing closing braces mid-response), but `HostedLLMPlanner.next_step()` let
+     that `ValueError` propagate straight out of `run_task()` as an unhandled traceback. Re-running the
+     exact same command by hand succeeded immediately — strong evidence of transient generation variance,
+     not a deterministic bug. Fixed with a bounded (one) retry inside `next_step()` for both
+     `HostedLLMPlanner` and `LocalFineTunedPlanner`: on a parse failure, log a warning and try once more
+     before raising, so isolated bad generations no longer crash a task outright, while a genuinely
+     persistent failure (e.g. a real API outage) still surfaces as an error rather than retrying forever.
+  2. **Desktop task failed on the very first click.** The planner emitted
+     `{"action": "click", "target_type": "desktop", "params": {"selector": "Start button"}}` for the
+     Windows Start button — but `action_router.py`'s desktop click path requires `target_text` or explicit
+     `x`/`y`, never `selector` (that key is only meaningful for `target_type="web"`, where
+     `PlaywrightDriver.click()` takes a CSS selector). Root cause: `SYSTEM_PROMPT`'s example schema showed
+     one blended example (`{"selector": "...", "text": "..."}`) that never actually distinguished the two
+     target types' different param shapes. Fixed two ways, deliberately layered: (a) rewrote
+     `SYSTEM_PROMPT` to spell out the web vs. desktop param schemas explicitly and separately, and (b)
+     added a defensive fallback in `action_router.py`'s `_resolve_coords()` — if a desktop click step still
+     arrives with `selector` instead of `target_text` (prompt compliance is never guaranteed, only
+     encouraged), treat `selector`'s value as `target_text` rather than failing the whole task, since it's
+     clearly the same underlying intent (click the thing labeled with this text) expressed with the wrong
+     key name. This is a naming normalization only — it changes nothing about which risk/boundary checks
+     already ran upstream in `orchestrator.py` before this method is ever reached.
+- **Why:** This is exactly what Phase 7 (`docs/PHASES.md`) exists to surface — real bugs no mock-based test
+  suite could have found, on the first real hardware run in the project's history, matching the pattern of
+  the 2026-07-13 profile-launch bug and the 2026-08-01 OCR `textord_min_linesize` bug before it.
+- **Impacts:** 244 → 249 tests passing (+5: 3 `test_planner.py` covering retry-then-succeed for both
+  backends and bounded-retry-still-raises-on-persistent-failure; 2 `test_action_router.py` covering the
+  `selector`→`target_text` fallback and confirming `target_text` still wins when both keys are present).
+  **Phase 7's success criterion is now substantially met**: one browser task and one desktop-target-type
+  task have both been attempted end-to-end on real Windows hardware, with real trace logs inspected and
+  two real issues found and fixed as a direct result. The desktop task's original run ended in
+  `status: error` — the user has not yet re-run it against these fixes to confirm a full desktop task
+  completes cleanly end-to-end; that confirmation, not just the fixes existing, is what should actually
+  close out Phase 7 in `docs/PHASES.md`.
+
+### [2026-08-01] First fully-completed desktop task — and two more real bugs found and fixed
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/confirmation/prompt_ui.py`, `src/action/mouse_keyboard.py`,
+  `src/action/action_router.py`, `src/brain/planner.py`, `tests/confirmation/test_prompt_ui.py`,
+  `tests/action/test_mouse_keyboard.py`, `tests/action/test_action_router.py`.
+- **What changed:** The user re-ran the desktop task ("open Notepad and type a test message") against the
+  previous entry's fixes and it completed with `status: done` — the first fully-completed desktop task in
+  this project's history, confirming `target_text`-based click resolution works correctly on real Windows
+  hardware. But the trace and terminal transcript revealed two more real, previously-invisible bugs:
+  1. **The confirmation gate silently approved an invalid answer.** At the third prompt the user typed
+     `Notepad` (a typo, not `A`/`D`/`E`) and the trace shows `"verdict": "approved"` anyway.
+     `prompt_ui.console_prompt()` only ever explicitly checked `choice == "d"` and `choice == "e"` —
+     literally any other input, including a blank Enter, silently fell through to a bare `# default / "a"`
+     comment and was treated as approved. This is the least safe possible default for a gate whose entire
+     purpose is deliberate human approval — the whole risk_classifier.py/boundary_guard.py safety model
+     assumes this gate only ever approves on a genuine, intentional approval. Fixed by rewriting the
+     function as a loop that re-prompts on anything not recognized as approve/deny/edit (accepting both
+     the single-letter and full-word forms), never falling through to approval by default. Confirmed the
+     GUI's `confirmation_dialog.py` never had this problem — it already defaults `self.verdict = "denied"`
+     and only flips to approved via an explicit button click, so this bug was isolated to the CLI path.
+  2. **The typed test message landed in the terminal, not Notepad.** The terminal transcript shows `This
+     is a test message.` printed after the script had already exited — the text was typed into whatever
+     window still had OS keyboard focus at that moment, not into Notepad. Root cause:
+     `mouse_keyboard.py`'s `type_text()` called `pyautogui.typewrite()` completely blindly, with no
+     verification that the intended window actually had focus, and `click_at()` had no settle delay for a
+     newly-launched app (Notepad) to actually finish opening before the very next step tried to type.
+     Fixed with an actual focus check, not a guess: `type_text()` now accepts an optional
+     `expect_window_contains` argument and polls the real active window title (via a new
+     `get_active_window_title()` on the `OSController` protocol, wrapping `pyautogui.getActiveWindow()`)
+     until it matches, up to a timeout, raising `RuntimeError` instead of typing into the wrong window if
+     it never does. `action_router.py`'s desktop `type` handler passes `params.get("expect_window_contains")`
+     through, and `SYSTEM_PROMPT` now tells the planner to supply it whenever a type step is meant for a
+     specific just-opened app (e.g. `{"text": "...", "expect_window_contains": "Notepad"}`). Also added a
+     brief post-click settle delay in `click_at()`/`double_click_at()` as a cheap, harmless floor
+     underneath the real fix (some UI transitions, like a menu opening, have no distinct window title to
+     poll for).
+- **Why:** Exactly what Phase 7 exists to surface, continuing the same pattern as every other entry today
+  — real bugs invisible to any mock, found only because the user ran real tasks on real hardware. The gate
+  bug in particular is a genuine safety-relevant finding: the entire confirmation-gate design assumes
+  approval is always deliberate, and this proves that assumption had a real hole in the one place a human
+  actually interacts with it.
+- **Impacts:** 249 → 258 tests passing (+9: 4 `test_prompt_ui.py` covering unrecognized-input re-prompt,
+  re-prompt-then-deny, blank-input-not-implicit-approve, and full-word accept; 4 `test_mouse_keyboard.py`
+  covering unverified-default behavior, wait-then-type success, case-insensitive matching, and
+  raise-instead-of-type-into-wrong-window with an explicit assertion that `typewrite()` is never called in
+  the failure case; 1 `test_action_router.py` confirming `expect_window_contains` passes through). Phase
+  7's success criterion is now substantially met for both execution paths — one full task has completed
+  end-to-end on real Windows hardware via both browser and desktop routes, with two more real,
+  previously-unknown bugs found and fixed as a direct result. Not yet done: the user has not re-run the
+  desktop task again against these two newest fixes to confirm the test message now actually lands inside
+  Notepad; DPI/multi-monitor scaling also remains unverified in any run so far.
+
+### [2026-08-01] Episodic replay was silently resurrecting pre-fix bugs + window re-activation +
+  auto-approve flag (user request)
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/memory/episodic_store.py`, `src/action/mouse_keyboard.py`,
+  `src/confirmation/gate.py`, `src/config.py`, `src/main.py`, `.env.example`,
+  `tests/memory/test_episodic_store.py`, `tests/action/test_mouse_keyboard.py`,
+  `tests/confirmation/test_gate.py`, `tests/test_config.py`.
+- **What changed:**
+  1. **Root cause of the previous entry's fix appearing not to work: episodic replay bypasses the
+     planner entirely, including any prompt/schema fix made to it.** The user re-ran the exact same
+     desktop task and the test message landed in the terminal again, despite the `expect_window_contains`
+     fix from the immediately preceding entry. The trace showed why: `"llm_call": false` on every step,
+     and `"status": "replay_attempt", "source_episode_id": 6, "match_score": 1.0"` — `EpisodicStore.
+     find_match()` matched the new instruction against an episode recorded during the FIRST (pre-fix)
+     desktop run, and replayed its stored steps verbatim, including a step-4 `params` dict with no
+     `expect_window_contains` key at all, because that field didn't exist yet when episode 6 was
+     recorded. The planner (and its fixed prompt) never ran at all for this task. This is a durable,
+     general problem: any future safety-relevant change to the step schema can be silently undone by
+     replay for as long as an old matching episode exists. Fixed with a `STEP_SCHEMA_VERSION` gate
+     (currently 2, bumped from an implicit 1): every recorded episode is stamped with the schema version
+     active when it was recorded, `find_match()` only ever offers episodes stamped with the CURRENT
+     version as replay candidates, and a migration backfills pre-existing databases' rows as version 1 (correctly
+     excluding them all from replay under version 2). Older episodes remain in the database for
+     history/review purposes, just never replayed. Future changes with the same "old stored steps could
+     miss a safety-relevant field" shape should bump this constant again.
+  2. **Window re-activation, not just detection.** The `expect_window_contains` check from the previous
+     entry only ever detected a focus mismatch and raised — it never tried to fix it. Given the user's
+     description of the actual mechanism (approving in the terminal steals OS focus away from the real
+     target app, which then sits in the background), `mouse_keyboard.py`'s `OSController` protocol gained
+     `activate_window(title_keyword) -> bool` (wrapping `pyautogui.getWindowsWithTitle(...).activate()`),
+     and `type_text()`'s polling loop now attempts activation exactly once on the first mismatch before
+     continuing to poll — actively trying to reclaim focus for the intended window rather than only ever
+     passively waiting and hoping.
+  3. **`AUTO_APPROVE_EXTERNAL` (explicit user request).** The user asked for a flag that approves
+     everything before even prompting, specifically because the act of approving in the terminal is itself
+     what causes the target app to lose focus. Added `auto_approve_external` to `ConfirmationGate`: when
+     enabled, External-risk steps are approved with `prompt_fn` never even called (not a fast default
+     answer — the prompt never appears, so there's no approve-in-the-terminal focus-steal to begin with).
+     Deliberately, unconditionally does NOT apply to `Risk.DESTRUCTIVE` regardless of this setting — that
+     tier's typed-CONFIRM-phrase requirement remains this project's one genuinely non-negotiable
+     human-in-the-loop gate, the same way `boundary_guard.py`'s hard boundaries can't be disabled by any
+     config value. Wired through `config.py`'s `AUTO_APPROVE_EXTERNAL` env var (default `false`) and
+     `main.py`, which prints a loud, explicit warning banner on startup whenever it's enabled, matching
+     this project's convention for every other safety/behavior trade-off.
+- **Why:** (1) is a direct root-cause investigation of why the previous entry's fix "didn't work" — it did
+  work, it just never got the chance to run. (2) and (3) are direct responses to the user's own diagnosis
+  and explicit request, implemented in the same defense-in-depth spirit as the rest of this project (fail
+  loud rather than silently guess, never let a convenience feature erode the one non-negotiable gate).
+- **Impacts:** 258 → 270 tests passing (+12: 4 `test_episodic_store.py` covering the exact real-world
+  stale-replay scenario, current-version replay still working, and DB migration correctness; 3
+  `test_mouse_keyboard.py` covering activation-attempted-once-on-mismatch, no-activation-when-already-
+  focused, and activation-not-spammed-every-poll; 3 `test_gate.py` covering prompt-never-called when
+  auto-approved, off-by-default, and the hard guarantee that Destructive is never affected; 2 additional
+  `test_config.py` for the new env var, plus reusing the existing default/case-insensitivity pattern). Not
+  yet done: the user has not yet re-run the desktop task against all of today's fixes together to confirm
+  a clean end-to-end result with the stale episode now correctly excluded from replay.
+
+### [2026-08-01] Chrome launch was blocking purely desktop-only tasks — made lazy; two GUI-path gaps found
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/action/playwright_driver.py`, `src/brain/orchestrator.py`,
+  `src/gui/worker.py`, `tests/action/test_playwright_driver.py`, `tests/brain/test_orchestrator.py`.
+- **What changed:**
+  1. **Chrome now launches lazily, on first real browser use, not unconditionally at startup.** The user
+     hit a fresh crash: `python -m src.main "open Notepad and type a test message"` — a task that never
+     touches a browser at all — failed with `ChromeProfileLaunchError` before a single step ran, because
+     `main.py`'s `with PlaywrightDriver(...) as driver:` wraps every task unconditionally, and the
+     constructor launched Chrome immediately. Worse, `orchestrator._observe()` called
+     `driver.current_url()`/`current_title()` on every step to build the planner's screen-state context —
+     so even if construction were made lazy, the very first observation call would still force a launch,
+     regardless of whether the task ever needed a browser. Fixed both halves together:
+     `PlaywrightDriver`'s constructor now only stores its arguments; `_ensure_launched()` is called at the
+     top of every real browser method (`navigate`/`click`/`type_text`/`scroll`/`screenshot`/`current_url`/
+     `current_title`), and a new `is_launched` property reports whether that's happened yet.
+     `orchestrator._observe()` now checks `is_launched` first and returns a `{"url": None, "title": None,
+     "browser_launched": False}` placeholder instead of calling into the driver if Chrome hasn't launched
+     — so a purely desktop-only task never touches Playwright/Chrome at any point in its lifecycle, and a
+     Chrome launch failure can no longer block a task that was never going to use a browser in the first
+     place. `_gate_context()`/`_capture_verification_screenshot()` were already safe (prefer
+     `mouse_keyboard`'s OS-level screenshot, only fall back to the browser's), so no change was needed
+     there.
+  2. **Found while checking the GUI path for the same eager-launch issue: two of today's earlier fixes
+     were only ever wired into `main.py`, never into `src/gui/worker.py`.** `worker.py` constructs its own
+     `ConfirmationGate`/`OCREngine` independently of `main.py` (the CLI and GUI are separate entry points
+     sharing the same core), and neither the `TESSERACT_CMD` fix nor the `AUTO_APPROVE_EXTERNAL` feature
+     from earlier today had been ported over — meaning a user running via the GUI specifically would still
+     hit the original Tesseract-not-on-PATH failure even after `python -m src.doctor` passed, and would
+     have no access to the auto-approve flag at all. Fixed both: `worker.py` now passes
+     `tesseract_cmd=self._cfg.tesseract_cmd` to `OCREngine` and `auto_approve_external=self._cfg.
+     auto_approve_external` to `ConfirmationGate`, matching `main.py` exactly. Not independently
+     live-tested (GUI tests require PySide6, unavailable in this build environment — see `docs/STATUS.md`'s
+     standing note on this), but the change is a direct, minimal port of an already-tested pattern.
+- **Why:** Direct fix for the user's live crash, plus the general architectural principle it exposes: a
+  task's dependencies should match what it actually does, not what the busiest possible task might need.
+  The GUI-path gaps are a reminder that this project has two independent entry points sharing core logic,
+  and a fix made in one isn't automatically present in the other — worth spot-checking both whenever a
+  similar cross-cutting config wiring fix is made in the future.
+- **Impacts:** 270 → 277 tests passing (+7: `test_playwright_driver.py` fully rewritten for lazy-launch
+  semantics with new coverage for constructor-never-launches, `is_launched` before/after, `profile_name`
+  never forcing a launch, safe no-op `close()` before any launch, and launch-only-attempted-once across
+  multiple calls; 1 new `test_orchestrator.py` test proving a desktop-only task's `_observe()` calls never
+  reach `driver.current_url()`/`current_title()` when unlaunched). Not yet done: the user has not yet
+  re-run the desktop task against this fix to confirm it no longer depends on Chrome at all; the GUI-path
+  fixes in `worker.py` have not been live-verified in either build environment.

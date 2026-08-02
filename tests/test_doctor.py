@@ -41,6 +41,22 @@ def test_check_tesseract_reports_success():
         result = check_tesseract()
     assert result.passed
     assert "5.3.4" in result.detail
+    assert "found on PATH" in result.detail
+
+
+def test_check_tesseract_uses_explicit_tesseract_cmd_when_given():
+    with patch("pytesseract.get_tesseract_version", return_value="5.3.4"):
+        result = check_tesseract(tesseract_cmd=r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    assert result.passed
+    assert "TESSERACT_CMD=" in result.detail
+
+
+def test_check_tesseract_reports_helpful_hint_when_explicit_cmd_is_wrong():
+    with patch("pytesseract.get_tesseract_version", side_effect=FileNotFoundError("bad path")):
+        result = check_tesseract(tesseract_cmd=r"C:\wrong\path\tesseract.exe")
+    assert not result.passed
+    assert "TESSERACT_CMD=" in result.detail
+    assert "does not point at a working Tesseract binary" in result.detail
 
 
 def test_check_playwright_chromium_reports_launch_failure():

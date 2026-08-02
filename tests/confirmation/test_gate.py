@@ -22,6 +22,53 @@ def test_external_denied_stays_denied():
     assert decision.verdict == "denied"
 
 
+def test_auto_approve_external_skips_prompt_entirely():
+    """Added 2026-08-01 per user request: approving in a terminal steals
+    focus from the actual target app. When enabled, External steps must be
+    approved with NO prompt call at all -- not just a fast default answer."""
+    calls = []
+
+    def prompt_fn(step, risk):
+        calls.append((step, risk))
+        return GateDecision(verdict="denied")  # if this were ever called, decision would be denied
+
+    gate = ConfirmationGate(prompt_fn=prompt_fn, auto_approve_external=True)
+    decision = gate.request_approval({"action": "click"}, Risk.EXTERNAL)
+
+    assert decision.verdict == "approved"
+    assert calls == []  # prompt_fn must never have been called
+
+
+def test_auto_approve_external_off_by_default():
+    calls = []
+
+    def prompt_fn(step, risk):
+        calls.append((step, risk))
+        return GateDecision(verdict="approved")
+
+    gate = ConfirmationGate(prompt_fn=prompt_fn)  # auto_approve_external not passed
+    gate.request_approval({"action": "click"}, Risk.EXTERNAL)
+    assert len(calls) == 1  # prompt_fn WAS called -- no auto-approve without opting in
+
+
+def test_auto_approve_external_never_applies_to_destructive():
+    """The one genuinely non-negotiable gate in this project: no
+    convenience flag may ever skip the destructive confirm-phrase prompt,
+    the same way boundary_guard.py's hard boundaries can't be disabled by
+    config."""
+    calls = []
+
+    def prompt_fn(step, risk):
+        calls.append((step, risk))
+        return GateDecision(verdict="approved", raw_user_input="CONFIRM")
+
+    gate = ConfirmationGate(prompt_fn=prompt_fn, auto_approve_external=True)
+    decision = gate.request_approval({"action": "delete"}, Risk.DESTRUCTIVE)
+
+    assert len(calls) == 1  # prompt_fn WAS called for Destructive despite auto_approve_external
+    assert decision.verdict == "approved"  # only because the confirm phrase was actually supplied
+
+
 def test_destructive_requires_confirm_phrase():
     # Approved but WITHOUT the "CONFIRM" phrase must be downgraded to denied.
     gate = ConfirmationGate(

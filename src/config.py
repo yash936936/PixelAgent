@@ -60,6 +60,25 @@ class Config:
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
 
+    # Perception (Phase 7 prep, 2026-08-01): explicit path to the Tesseract
+    # binary, for the common case where it's installed but not on PATH --
+    # src/doctor.py's Tesseract check surfaces exactly this failure mode.
+    # None (the default) means OCREngine relies on PATH as before.
+    tesseract_cmd: str | None = None
+
+    # Confirmation gate (2026-08-01, docs/DECISIONS.md): added per an
+    # explicit user request after finding that approving in a terminal
+    # steals OS focus from the actual target app, which then goes to the
+    # background and can cause the NEXT step to act on the wrong window.
+    # When True, EXTERNAL-risk steps are approved with no prompt shown at
+    # all -- see ConfirmationGate's docstring. Deliberately does NOT apply
+    # to Risk.DESTRUCTIVE regardless of this setting; that gate's confirm
+    # phrase requirement is non-negotiable, the same way boundary_guard.py's
+    # hard boundaries can't be disabled by any config value. Defaults to
+    # False -- this trades a real safety check for convenience, so it must
+    # be an explicit, deliberate opt-in, never a silent default.
+    auto_approve_external: bool = False
+
     def ensure_dirs(self) -> None:
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -74,7 +93,8 @@ def load(env_path: str | None = None) -> Config:
     Optional env vars:
       LLM_MODEL, PLANNER_BACKEND, LOCAL_PLANNER_ENDPOINT, RISK_MODEL_BACKEND,
       LOCAL_RISK_MODEL_ENDPOINT, DEFAULT_CHROME_PROFILE,
-      PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+      PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
+      TESSERACT_CMD, AUTO_APPROVE_EXTERNAL
     """
     load_dotenv(env_path)
 
@@ -115,6 +135,8 @@ def load(env_path: str | None = None) -> Config:
         log_dir=Path(os.environ.get("LOG_DIR", "./logs")),
         langfuse_public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
         langfuse_secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
+        tesseract_cmd=os.environ.get("TESSERACT_CMD") or None,
+        auto_approve_external=os.environ.get("AUTO_APPROVE_EXTERNAL", "false").strip().lower() == "true",
     )
     cfg.ensure_dirs()
     return cfg

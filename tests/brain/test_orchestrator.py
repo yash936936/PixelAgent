@@ -49,6 +49,39 @@ def test_task_completes_on_done_step():
     action_router.execute.assert_not_called()
 
 
+def test_desktop_only_task_never_calls_browser_observation_methods_when_unlaunched():
+    """Real bug found live (docs/DECISIONS.md 2026-08-01): a purely
+    desktop-only task crashed on a Chrome launch failure it should never
+    have depended on in the first place. _observe() must check
+    driver.is_launched before calling current_url()/current_title() --
+    otherwise even building screen context for the planner would force a
+    browser launch on a task that never needs one."""
+    driver = MagicMock()
+    driver.is_launched = False
+
+    action_router = MagicMock()
+    action_router.execute.return_value = {"status": "executed"}
+    gate = MagicMock()
+    gate.request_approval.return_value = GateDecision(verdict="approved")
+    logger = MagicMock()
+    planner = MagicMock()
+    planner.next_step.side_effect = [
+        {"action": "click", "description": "Click Start", "target_type": "desktop",
+         "params": {"target_text": "Start"}},
+        {"action": "done", "description": "finished", "target_type": "desktop", "params": {}},
+    ]
+
+    orch = Orchestrator(
+        planner=planner, driver=driver, action_router=action_router, gate=gate, logger=logger,
+        max_steps=5,
+    )
+    result = orch.run_task("open Notepad")
+
+    assert result["status"] == "done"
+    driver.current_url.assert_not_called()
+    driver.current_title.assert_not_called()
+
+
 def test_local_step_executes_without_gate():
     orch, action_router, gate, logger = make_orchestrator(
         planner_steps=[

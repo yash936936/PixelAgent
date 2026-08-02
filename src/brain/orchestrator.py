@@ -346,9 +346,23 @@ class Orchestrator:
         return risk
 
     def _observe(self) -> dict:
+        """Fix for a real bug found live (docs/DECISIONS.md 2026-08-01): a
+        purely desktop-only task ("open Notepad...") was still crashing on
+        a Chrome launch failure, because this method unconditionally called
+        current_url()/current_title() on every step -- even before the
+        first real step ran -- which forced PlaywrightDriver to launch
+        Chrome just to observe, regardless of whether the task would ever
+        actually use a browser. Now checks is_launched first: if Chrome
+        hasn't been launched yet, returns a placeholder rather than forcing
+        a launch. The browser only actually launches when a target_type=
+        "web" step is executed for real (see playwright_driver.py's lazy
+        _ensure_launched())."""
+        if not self._driver.is_launched:
+            return {"url": None, "title": None, "browser_launched": False}
         return {
             "url": self._driver.current_url(),
             "title": self._driver.current_title(),
+            "browser_launched": True,
         }
 
     def _gate_context(self) -> GateContext:

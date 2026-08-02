@@ -191,6 +191,24 @@ log, not just the eval harness.
 ---
 
 ## Phase 7 — First real live validation (Windows)
+**Status: substantially complete (2026-08-01) — both execution paths have completed a full task on real
+hardware; seven real bugs found and fixed in total, spanning the planner, the confirmation gate, episodic
+memory, window focus, and the browser launch lifecycle itself.** Browser task succeeded (after a transient
+truncated-JSON crash was fixed with a retry). Desktop task completed end-to-end on re-run (`status: done`)
+after fixing a planner/action_router schema mismatch, a safety-relevant confirmation-gate bug, and a
+window-focus verification gap. A re-run of the SAME task then hit two more real issues in sequence: first,
+episodic replay silently bypassing the planner (and the just-made fix) by reusing a pre-fix episode's
+stored steps verbatim — closed with a `STEP_SCHEMA_VERSION` replay gate — and then, once that was fixed,
+the task failed again on an unconditional Chrome launch for a task that never uses a browser at all —
+closed by making Chrome launch lazily and having `orchestrator._observe()` cooperate with that laziness.
+Also added, per the user's own diagnosis and explicit request: active window re-activation and an opt-in
+`AUTO_APPROVE_EXTERNAL` flag (never applies to Destructive). While fixing the Chrome-launch issue, found
+and fixed two gaps where earlier fixes had only been wired into the CLI path (`main.py`), never the GUI's
+(`src/gui/worker.py`). See `docs/DECISIONS.md`'s 2026-08-01 entries for all seven bugs and fixes. Not yet
+done: re-running the desktop task against this full combined set of fixes to confirm a fully clean
+end-to-end result with no browser dependency; DPI/multi-monitor scaling remains unverified in any run to
+date; the GUI-path port is unverified in any environment.
+
 Goal: close the "zero live validation" gap that has been honestly flagged since Phase 5 — the browser path
 has been live-run-tested once (2026-07-13, profile-launch bug); the desktop path never has.
 

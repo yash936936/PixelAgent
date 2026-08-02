@@ -12,8 +12,31 @@ training per the user's stated plan (build the GUI now, train once real usage da
 (`tests/integration/`) — the latter immediately found and fixed a genuine OCR bug (see below). Plus
 (2026-08-01, Phase 6 of `docs/PHASES.md`): the semantic layer is now actually live-wired into the
 orchestrator (`RISK_MODEL_BACKEND=semantic` in `config.py`, `_check_boundary()`'s always-on second layer)
-— previously it only ran inside the eval harness. Non-GUI suite: 195 → 229 tests passing (+34: 18
-semantic-layer, 6 real-pixel integration, 2 OCR regression, 8 Phase-6 wiring) — verified with
+— previously it only ran inside the eval harness. Plus (2026-08-01): Phase 7 prep (`src/doctor.py`
+pre-flight tool, `TESSERACT_CMD` config wiring) followed by the actual first live runs on the user's real
+Windows machine — two real bugs found and fixed (a transient truncated-JSON planner crash, now retried
+once before raising; a planner/action_router schema mismatch on desktop clicks, now fixed in both the
+prompt and with a defensive fallback). The browser path is now confirmed working end-to-end on real
+hardware. The desktop path then completed fully on re-run, surfacing two more real bugs, one
+safety-relevant: the CLI confirmation gate silently approved a typo/unrecognized input instead of
+re-prompting (now fixed — loops until a real approve/deny/edit answer is given, never defaults to
+approval), and `mouse_keyboard.py`'s `type_text()` had no verification the intended window actually had
+focus, which let a test message get typed into the terminal instead of Notepad (now fixed with a real
+active-window poll before typing). On the user's very next re-run, the SAME symptom recurred — root-caused
+to episodic replay silently bypassing the planner (and thus the fix just made) by reusing a pre-fix
+episode's stored steps verbatim; fixed with a `STEP_SCHEMA_VERSION` gate that permanently excludes
+old-schema episodes from replay. Also added, per the user's own diagnosis and explicit request: active
+window re-activation (not just detection) when the expected window loses focus, and an opt-in
+`AUTO_APPROVE_EXTERNAL` flag that skips the External-risk prompt entirely (never applies to Destructive).
+On the very next attempt after that, a NEW failure appeared: the desktop-only task crashed on a Chrome
+launch failure despite never using a browser, because Chrome launched unconditionally for every task and
+`_observe()` queried the driver on every step regardless of task type. Fixed by making Chrome launch lazily
+(only on first real browser use) and having `_observe()` cooperate by checking `is_launched` first — a
+desktop-only task now never touches Playwright/Chrome at all. Also found and fixed, while verifying the
+GUI's separate entry point: `src/gui/worker.py` had never received the `TESSERACT_CMD` or
+`AUTO_APPROVE_EXTERNAL` wiring added earlier in this session.
+Non-GUI suite: 195 →
+277 tests passing (+82 total across all of today's work) — verified with
 `python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the 232-test
 full-suite figure from 2026-07-13 (which includes the 38 GUI tests) was not re-verified in this same
 environment and should be re-confirmed on a machine with PySide6 installed before being combined with the
@@ -52,17 +75,17 @@ data every earlier test used, even though it is not yet the full live system.**
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
 | `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 5 rule-table expansion + read-only guard) |
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
-| `src/action/playwright_driver.py` | 1.3 | Complete (fixed real profile-launch bug found via live GUI run, 2026-07-13) |
+| `src/action/playwright_driver.py` | 1.3 (updated 2026-08-01) | Complete (fixed real profile-launch bug found via live GUI run, 2026-07-13; made Chrome launch lazy — `is_launched` property — after a desktop-only live task was needlessly blocked by a Chrome launch failure) |
 | \`src/action/action_router.py\` | 1.3 (updated 2.2) | Complete (desktop branch added) |
-| \`src/action/mouse_keyboard.py\` | 2.2 | Complete |
-| `src/confirmation/gate.py` | 1.4 | Complete |
+| \`src/action/mouse_keyboard.py\` | 2.2 (updated 2026-08-01) | Complete (real focus-verification + active-reactivation before typing, found/fixed via Phase 7 live run) |
+| `src/confirmation/gate.py` | 1.4 (updated 2026-08-01) | Complete (fixed CLI unrecognized-input-silently-approves bug; added opt-in `auto_approve_external`, never applies to Destructive) |
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
 | `src/observability/logger.py` | 1.5 (updated Phase 4) | Complete (LoopAudit + log_event, llm_call accuracy) |
 | `src/observability/trace_replay.py` | 5 | Complete |
 | \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
-| `src/memory/episodic_store.py` | 3.1 (updated Phase 4) | Complete (edited flag + flagged_for_review) |
+| `src/memory/episodic_store.py` | 3.1 (updated Phase 4, updated 2026-08-01) | Complete (edited flag + flagged_for_review + `STEP_SCHEMA_VERSION` replay gate, closing a real bug where stale pre-fix episodes were silently replayed) |
 | `src/memory/semantic_store.py` | 3.2 | Complete |
 | `src/memory/memory_api.py` | 3.2 (updated Phase 4) | Complete |
 | `src/brain/research_router.py` | 4.1 | Complete |
@@ -70,7 +93,7 @@ data every earlier test used, even though it is not yet the full live system.**
 | `src/gui/style.py` | GUI (2026-07-12) | Complete |
 | `src/gui/app.py` | GUI (2026-07-12) | Complete |
 | `src/gui/main_window.py` | GUI (2026-07-12) | Complete (full dashboard: composer + trace + stats + memory) |
-| `src/gui/worker.py` | GUI (2026-07-12) | Complete (background QThread + cross-thread confirmation bridge) |
+| `src/gui/worker.py` | GUI (2026-07-12, updated 2026-08-01) | Complete (background QThread + cross-thread confirmation bridge; ported `TESSERACT_CMD`/`auto_approve_external` wiring from `main.py`, found missing during a lazy-launch spot-check — unverified in this build environment, PySide6 unavailable) |
 | `src/gui/gui_logger.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/task_composer.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/trace_panel.py` | GUI (2026-07-12) | Complete |
@@ -78,7 +101,7 @@ data every earlier test used, even though it is not yet the full live system.**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (non-GUI: 240 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression + 8 Phase-6 wiring + 11 doctor tool; see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/` | ongoing | In progress (non-GUI: 277 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression + 8 Phase-6 wiring + 11 doctor tool + 4 TESSERACT_CMD wiring + 5 Phase-7 live-bug fixes (planner retry + schema fallback) + 9 Phase-7 live-bug fixes (gate safety + window-focus verification) + 12 Phase-7 live-bug fixes (episodic replay gate + window re-activation + auto-approve) + 7 Phase-7 live-bug fixes (lazy Chrome launch); see note above re: 38 GUI-only tests not re-verified this session) |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -260,6 +283,66 @@ diagnostic checking every Phase 7 environment prerequisite (Tesseract on PATH, P
 launches, config/API key loads, writable dirs, Phase 6's semantic layer) without executing a real task —
 and `docs/PHASE_7_CHECKLIST.md`, the ordered step-by-step sequence for the user's own live run (doctor tool
 → verify the real Chrome profile per the 2026-07-13 profile-bug lesson → browser-only task first →
-desktop-target-type task → capture the trace log → report back). Non-GUI suite: 229 → 240 tests passing.
+desktop-target-type task → capture the trace log → report back). Non-GUI suite: 229 → 244 tests passing.
 **Phase 7 itself remains not done** — this only prepares for it; the actual live run requires the user's
 Windows machine and cannot be completed or verified here.
+
+---
+**Update 2026-08-01 (Phase 7 — first real live runs, two real bugs found and fixed):** The user completed
+the first real task runs in this project's history. Browser task: hit a transient truncated-JSON crash on
+attempt one, succeeded on attempt two by hand — fixed with a bounded one-retry in both
+`HostedLLMPlanner.next_step()` and `LocalFineTunedPlanner.next_step()`. Desktop task: failed on the first
+click because the planner used the web-schema `selector` key instead of `target_text` for a desktop step
+— `SYSTEM_PROMPT` never actually distinguished the two schemas; fixed the prompt and added a defensive
+`selector`→`target_text` fallback in `action_router.py`. Non-GUI suite: 244 → 249 tests passing. Full
+details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching 2026-08-01 entries. **Phase 7 is in progress, not
+complete** — the confirmation gate and browser path are now confirmed working end-to-end on real hardware,
+but the desktop task has not yet been re-run against these fixes to confirm a full desktop task completes
+cleanly; DPI/multi-monitor scaling also remains unverified.
+
+---
+**Update 2026-08-01 (first fully-completed desktop task — two more bugs, one safety-relevant):** The user
+re-ran the desktop task and it completed with `status: done` — the first fully-completed desktop task in
+this project's history. But the trace/transcript revealed two more real bugs. **Safety-relevant:**
+`prompt_ui.console_prompt()` silently treated ANY unrecognized input (a typo, a blank Enter) as approval —
+confirmed live when a typo (`Notepad`) at the gate prompt was recorded as `"verdict": "approved"`. Fixed by
+looping until a real approve/deny/edit answer is given; confirmed the GUI dialog never had this problem
+(it already defaults to denied). **Correctness-relevant:** the typed test message was found printed in the
+terminal after the process exited, not inside Notepad — `mouse_keyboard.py`'s `type_text()` had no
+verification that the intended window actually had focus before typing. Fixed with a real active-window
+poll (`expect_window_contains`, wired through `action_router.py` and `SYSTEM_PROMPT`) that raises rather
+than typing into the wrong window if the expected one never gains focus. Non-GUI suite: 249 → 258 tests
+passing. Full details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching entries. Phase 7 success criterion
+is now substantially met for both paths; not yet done: re-confirming the message lands in Notepad with
+these newest fixes, and DPI/multi-monitor scaling remains unverified.
+
+---
+**Update 2026-08-01 (episodic replay was silently undoing the fix + window re-activation +
+AUTO_APPROVE_EXTERNAL):** The user re-ran the desktop task and the message landed in the terminal again —
+the trace showed why: `"llm_call": false` and `"source_episode_id": 6, "match_score": 1.0"`. Replay had
+matched a PRE-FIX episode and reused its stored steps verbatim, bypassing the planner (and the previous
+entry's `expect_window_contains` fix) entirely. Root-caused and fixed with a `STEP_SCHEMA_VERSION` gate on
+`EpisodicStore.find_match()` — old episodes are permanently excluded from replay once the schema version is
+bumped, forcing a fresh plan through the current (fixed) planner instead. Also added, per the user's own
+diagnosis and explicit request: active window re-activation in `mouse_keyboard.py` (not just detection —
+`type_text()` now tries once to reclaim focus for the expected window before giving up), and
+`AUTO_APPROVE_EXTERNAL` (skips the External-risk prompt entirely when enabled; never applies to Destructive,
+which keeps its confirm-phrase requirement unconditionally). Non-GUI suite: 258 → 270 tests passing. Full
+details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching entries. Not yet done: re-running the desktop task
+against this combined set of fixes to confirm a clean end-to-end result.
+
+---
+**Update 2026-08-01 (Chrome launch made lazy — a desktop-only task was needlessly blocked by it; two
+GUI-path gaps found):** The user's next attempt at the desktop task failed before any step ran, with a
+`ChromeProfileLaunchError` — for a task that never uses a browser at all. Root cause: `main.py` launches
+Chrome unconditionally for every task, and `orchestrator._observe()` called `driver.current_url()`/
+`current_title()` on every step regardless of task type. Fixed together: `PlaywrightDriver` now only
+launches Chrome on first real browser use (`is_launched` property added), and `_observe()` checks that
+before calling into the driver, returning a placeholder instead of forcing a launch. A purely desktop-only
+task now never touches Playwright/Chrome at all. While verifying the GUI's separate entry point didn't have
+the same problem, found two unrelated real gaps: `src/gui/worker.py` never received either the
+`TESSERACT_CMD` fix or the `AUTO_APPROVE_EXTERNAL` feature added earlier this session (it builds its own
+`OCREngine`/`ConfirmationGate` independently of `main.py`) — both ported over. Non-GUI suite: 270 → 277
+tests passing. Full details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching entries. Not yet done:
+re-running the desktop task to confirm it no longer depends on Chrome; the `worker.py` port is unverified in
+any environment (GUI tests require PySide6).

@@ -44,10 +44,31 @@ class GateDecision:
 class ConfirmationGate:
     """prompt_fn is injected so the gate has no direct UI dependency — Phase 1
     uses the console prompt_ui.py, a future GUI can supply a different
-    callable with the same signature."""
+    callable with the same signature.
 
-    def __init__(self, prompt_fn: Callable[[dict, Risk, GateContext], GateDecision]) -> None:
+    auto_approve_external (2026-08-01, docs/DECISIONS.md): added per an
+    explicit user request after finding that approving in a terminal
+    window steals OS focus away from the actual target app (browser/
+    Notepad), which then goes to the background and can cause the next
+    step to act on the wrong window. When enabled, EXTERNAL-risk steps are
+    approved immediately with NO prompt shown at all -- not just a fast
+    default answer, the prompt_fn is never even called, so there is no
+    approve-in-the-terminal focus-steal to cause the problem in the first
+    place. Deliberately does NOT apply to Risk.DESTRUCTIVE regardless of
+    this setting -- that tier's extra typed-CONFIRM-phrase requirement is
+    this project's one genuinely non-negotiable human-in-the-loop gate,
+    the same way boundary_guard.py's hard boundaries can't be disabled by
+    any config value, and a convenience flag for reducing interruptions is
+    not sufficient reason to remove the one gate specifically designed to
+    require deliberate, hard-to-fat-finger confirmation."""
+
+    def __init__(
+        self,
+        prompt_fn: Callable[[dict, Risk, GateContext], GateDecision],
+        auto_approve_external: bool = False,
+    ) -> None:
         self._prompt_fn = prompt_fn
+        self._auto_approve_external = auto_approve_external
 
     def request_approval(
         self, step: dict, risk: Risk, context: GateContext | None = None
@@ -57,6 +78,9 @@ class ConfirmationGate:
             # by the orchestrator's needs_confirmation() check upstream, but
             # guarded here too so this module can never be called with a
             # Local step and silently approve it.
+            return GateDecision(verdict="approved")
+
+        if risk == Risk.EXTERNAL and self._auto_approve_external:
             return GateDecision(verdict="approved")
 
         decision = self._call_prompt(step, risk, context or GateContext())

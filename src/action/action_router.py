@@ -72,7 +72,9 @@ class ActionRouter:
         elif action == "double_click":
             self._mouse_keyboard.double_click_at(*self._resolve_coords(params))
         elif action == "type":
-            self._mouse_keyboard.type_text(params["text"])
+            self._mouse_keyboard.type_text(
+                params["text"], expect_window_contains=params.get("expect_window_contains")
+            )
         elif action == "hotkey":
             self._mouse_keyboard.press_hotkey(*params["keys"])
         elif action == "screenshot":
@@ -85,11 +87,26 @@ class ActionRouter:
     def _resolve_coords(self, params: dict) -> tuple[int, int]:
         """A desktop click/double_click step can specify either explicit
         (x, y), or a target_text keyword the perception layer locates on the
-        current screen via OCR + element detection."""
+        current screen via OCR + element detection.
+
+        Defensive fallback (found by Phase 7's first-ever live desktop run,
+        docs/DECISIONS.md 2026-08-01): the planner's prompt distinguishes
+        target_type="web" (params={"selector": ...}) from target_type=
+        "desktop" (params={"target_text": ...} or {"x", "y"}), but an LLM
+        occasionally still emits "selector" for a desktop step anyway --
+        prompt compliance is never guaranteed, only encouraged. Rather than
+        fail the whole task on what's clearly a same-intent naming mistake
+        (the model DID try to say "click the thing labeled this text", it
+        just used the web-schema key), treat "selector" as equivalent to
+        "target_text" here as a last resort -- this is a naming
+        normalization, not a change in what gets clicked or a weakening of
+        any risk/boundary check upstream, both of which already ran before
+        this method is ever reached."""
         if "x" in params and "y" in params:
             return params["x"], params["y"]
 
-        if "target_text" not in params:
+        target_text = params.get("target_text") or params.get("selector")
+        if not target_text:
             raise ValueError(
                 "Desktop click step needs either explicit 'x'/'y' params or a 'target_text' "
                 "keyword for the perception layer to locate on screen."
@@ -104,11 +121,9 @@ class ActionRouter:
         screenshot = self._mouse_keyboard.screenshot()
         words = self._ocr_engine.read(screenshot)
         regions = detect_regions(words)
-        matches = find_relevant_regions(regions, [params["target_text"]])
+        matches = find_relevant_regions(regions, [target_text])
 
         if not matches:
-            raise ValueError(
-                f"Could not locate an on-screen element matching '{params['target_text']}'"
-            )
+            raise ValueError(f"Could not locate an on-screen element matching '{target_text}'")
 
         return matches[0].center

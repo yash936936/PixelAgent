@@ -67,18 +67,23 @@ def _build_risk_model_judge(cfg):
     return None
 
 
-def _build_desktop_backends():
+def _build_desktop_backends(cfg):
     """Desktop control (MouseKeyboard) and OCR require a real display/OS and
     the Tesseract binary respectively — both optional at runtime. If either
     is unavailable, Pixel still works for browser-only tasks; only
-    target_type='desktop' steps require them (see docs/PHASES.md Part 2.2)."""
+    target_type='desktop' steps require them (see docs/PHASES.md Part 2.2).
+
+    cfg.tesseract_cmd (2026-08-01, Phase 7 prep) lets OCREngine find
+    Tesseract when it's installed but not on PATH -- the exact failure mode
+    src/doctor.py's Tesseract check surfaces. None (the default) falls back
+    to relying on PATH, unchanged from before."""
     try:
         mouse_keyboard = MouseKeyboard()
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] Desktop control unavailable ({exc}); web-only mode.")
         mouse_keyboard = None
 
-    ocr_engine = OCREngine()  # cheap to construct; fails only when .read() is called
+    ocr_engine = OCREngine(tesseract_cmd=cfg.tesseract_cmd)  # cheap to construct; fails only when .read() is called
     return mouse_keyboard, ocr_engine
 
 
@@ -103,10 +108,17 @@ def main(instruction: str) -> dict:
 
     logger = Logger(cfg.log_dir)
     planner = _build_planner(cfg)
-    gate = ConfirmationGate(prompt_fn=console_prompt)
+    if cfg.auto_approve_external:
+        print(
+            "[warn] AUTO_APPROVE_EXTERNAL=true — External-risk steps will be approved with NO "
+            "confirmation prompt shown. Destructive-risk steps are UNAFFECTED and will always still "
+            "require the interactive confirm phrase. See docs/DECISIONS.md 2026-08-01 for why this "
+            "exists and its exact boundaries."
+        )
+    gate = ConfirmationGate(prompt_fn=console_prompt, auto_approve_external=cfg.auto_approve_external)
     replanner = Replanner(planner=planner)
     memory = MemoryAPI(log_dir=cfg.log_dir)
-    mouse_keyboard, ocr_engine = _build_desktop_backends()
+    mouse_keyboard, ocr_engine = _build_desktop_backends(cfg)
 
     with PlaywrightDriver(cfg.default_chrome_profile, cfg.profiles_dir) as driver:
         router = ActionRouter(

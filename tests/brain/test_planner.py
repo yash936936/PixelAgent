@@ -36,6 +36,34 @@ def test_local_planner_raises_on_invalid_json():
         planner.next_step("do the thing", {}, [])
 
 
+def test_local_planner_retries_once_on_truncated_json_then_succeeds():
+    """Real failure mode found by Phase 7's first live run (docs/DECISIONS.md
+    2026-08-01): a transiently truncated/malformed generation must not crash
+    the whole task if a retry would succeed."""
+    calls = {"count": 0}
+
+    def flaky_generate(system_prompt, user_content):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return '{\n  "action": "navigate",\n  "description": "truncated'  # malformed
+        return json.dumps(
+            {"action": "navigate", "description": "d", "target_type": "web", "params": {"url": "x"}}
+        )
+
+    planner = LocalPlanner(generate_fn=flaky_generate)
+    step = planner.next_step("do the thing", {}, [])
+    assert step["action"] == "navigate"
+    assert calls["count"] == 2
+
+
+def test_local_planner_raises_after_two_consecutive_failures():
+    """Bounded retry -- a persistent failure (e.g. a real outage) must
+    still surface as an error rather than retrying forever."""
+    planner = LocalPlanner(generate_fn=lambda system, prompt: "still not json")
+    with pytest.raises(ValueError):
+        planner.next_step("do the thing", {}, [])
+
+
 def test_local_planner_raises_on_missing_required_field():
     incomplete = json.dumps({"action": "click"})
     planner = LocalPlanner(generate_fn=lambda system, prompt: incomplete)
@@ -109,7 +137,38 @@ def test_hosted_planner_cost_zero_when_no_usage_metadata(monkeypatch):
     assert planner.last_call_cost == 0.0
 
 
-def test_hosted_planner_generate_fn_reusable_for_risk_judge(monkeypatch):
+def test_hosted_planner_retries_once_on_truncated_json_then_succeeds(monkeypatch):
+    responses = [
+        SimpleNamespace(text='{"action": "navigate", "description": "truncated', usage_metadata=None),
+        SimpleNamespace(
+            text=json.dumps(
+                {"action": "navigate", "description": "d", "target_type": "web", "params": {"url": "x"}}
+            ),
+            usage_metadata=None,
+        ),
+    ]
+
+    class FakeModels:
+        def __init__(self):
+            self.call_count = 0
+
+        def generate_content(self, **kwargs):
+            resp = responses[self.call_count]
+            self.call_count += 1
+            return resp
+
+    fake_models = FakeModels()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.models = fake_models
+
+    monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
+
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    step = planner.next_step("do it", {}, [])
+    assert step["action"] == "navigate"
+    assert fake_models.call_count == 2
     class FakeResponse:
         text = json.dumps({"risk": "destructive", "reason": "test"})
         usage_metadata = None

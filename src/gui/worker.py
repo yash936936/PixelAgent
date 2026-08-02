@@ -77,7 +77,13 @@ class TaskWorker(QThread):
             from src.brain.planner import HostedLLMPlanner
 
             planner = HostedLLMPlanner(api_key=self._cfg.gemini_api_key, model=self._cfg.llm_model)
-            gate = ConfirmationGate(prompt_fn=self._gate_bridge.prompt_fn)
+            # Fix (2026-08-01, docs/DECISIONS.md): auto_approve_external was wired into main.py's
+            # ConfirmationGate but never ported to this GUI worker path -- found while checking whether
+            # a related lazy-launch fix also needed porting here. Defaults to False via cfg, so this is
+            # a no-op unless the user has actually opted in.
+            gate = ConfirmationGate(
+                prompt_fn=self._gate_bridge.prompt_fn, auto_approve_external=self._cfg.auto_approve_external
+            )
             replanner = Replanner(planner=planner)
             memory = MemoryAPI(log_dir=self._cfg.log_dir)
 
@@ -85,7 +91,11 @@ class TaskWorker(QThread):
                 mouse_keyboard = MouseKeyboard()
             except Exception:  # noqa: BLE001 — desktop control optional, see main.py
                 mouse_keyboard = None
-            ocr_engine = OCREngine()
+            # Fix (2026-08-01, docs/DECISIONS.md): TESSERACT_CMD was wired into main.py's OCREngine
+            # construction but never ported to this GUI worker path -- same gap as auto_approve_external
+            # above. Without this, a user with Tesseract installed-but-not-on-PATH could pass
+            # `python -m src.doctor` yet still hit OCR failures specifically when running via the GUI.
+            ocr_engine = OCREngine(tesseract_cmd=self._cfg.tesseract_cmd)
 
             with PlaywrightDriver(self._cfg.default_chrome_profile, self._cfg.profiles_dir) as driver:
                 router = ActionRouter(

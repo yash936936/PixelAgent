@@ -359,3 +359,131 @@ Append to the bottom of this file after each pass:
 - Result: **Pass**, with one real, previously-undiscovered bug found and fixed as a direct result of this
   pass's own harness — the second time in this project's history (after the 2026-07-13 profile-launch bug)
   that testing against something more real than a mock has surfaced a bug unit tests alone could not.
+
+### [2026-08-01] Debug pass — first real live task runs surface two real bugs (third and fourth times a
+  real environment found what mocks couldn't)
+- Files checked: `src/brain/planner.py`, `src/action/action_router.py`, plus the two real trace logs the
+  user provided from their own Windows machine.
+- Issues found:
+  1. **Unhandled crash on a truncated Gemini response.** First browser task run ended in a raw Python
+     traceback (`json.decoder.JSONDecodeError` inside `_parse_step`, propagating out of
+     `HostedLLMPlanner.next_step()` uncaught). The response text was cut off mid-JSON
+     (`'{\n  "action": "navigate", ... "url": "https://www.bing.com/search?q=weather"}'` — missing closing
+     braces). Re-running the identical command by hand succeeded on the very next attempt, which is the
+     key evidence this was transient generation variance rather than a reproducible bug a retry would just
+     repeat. Fixed with a bounded (exactly one) retry in `next_step()` for both `HostedLLMPlanner` and
+     `LocalFineTunedPlanner` — logs a warning and tries again once before raising, so a single bad
+     generation no longer takes down the whole task.
+  2. **First-ever desktop click failed immediately.** Trace log showed the confirmation gate correctly
+     firing and being approved (`verdict: "approved"`, screenshot captured) — proof the GUI/gate machinery
+     itself worked correctly on real hardware — but the actual click then failed:
+     `"Desktop click step needs either explicit 'x'/'y' params or a 'target_text' keyword..."` because the
+     planner had used `params={"selector": "Start button"}`, the web-schema key, on a `target_type=
+     "desktop"` step. Root-caused to `SYSTEM_PROMPT` never actually distinguishing the two target types'
+     param shapes in its example. Fixed both the prompt (explicit, separated web/desktop schema
+     description) and, as defense-in-depth since prompt compliance is never guaranteed, a fallback in
+     `action_router.py._resolve_coords()` treating a stray `selector` key as `target_text` on desktop
+     steps.
+- Issues NOT fixed / still open: the user has not yet re-run the desktop task against these fixes to
+  confirm a full task completes end-to-end — the original run's final status was still `error`. DPI/
+  multi-monitor scaling (flagged as untested since the `tests/integration/` harness fixed its viewport)
+  remains unverified; this run happened to succeed on click resolution before the schema bug stopped it,
+  so scaling accuracy specifically is still an open question for the next attempt.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 249/249 passed (244 previous + 3 planner-retry
+  tests + 2 action-router-fallback tests).
+- Result: **Partial pass.** Both bugs found this pass are fixed and covered by new tests, but Phase 7's own
+  success criterion (one full task completing end-to-end on real hardware via each execution path) is not
+  yet confirmed for the desktop path — that requires the user to re-run it against these fixes. This is
+  the third and fourth time in this project's history (after 2026-07-13's profile bug and 2026-08-01's OCR
+  `textord_min_linesize` bug) that something more real than a mock — here, an actual live run on the user's
+  own machine — found a bug no test suite had.
+
+### [2026-08-01] Debug pass — first fully-completed desktop task, two more real bugs (fifth and sixth)
+- Files checked: `src/confirmation/prompt_ui.py`, `src/action/mouse_keyboard.py`,
+  `src/action/action_router.py`, plus the trace log and terminal transcript from the user's own re-run.
+- Issues found:
+  1. **Safety-relevant: the CLI confirmation gate silently approved a typo.** The user typed `Notepad` at
+     an approve/deny/edit prompt — not a recognized option — and the trace recorded `"verdict":
+     "approved"` regardless. `console_prompt()` had no `else` branch; anything that wasn't exactly `"d"` or
+     `"e"` fell through to an unlabeled default-approve. Confirmed this was NOT present in the GUI's
+     `confirmation_dialog.py` (which already defaults to denied and only flips on an explicit button
+     click) — isolated to the CLI path only. Fixed by looping until a real approve/deny/edit answer is
+     given, never defaulting to approval on anything unrecognized, including a blank Enter.
+  2. **The typed message went into the terminal, not Notepad.** Terminal transcript showed `This is a test
+     message.` printed after the process had exited — proof the final `type` step's keystrokes landed
+     somewhere other than the intended Notepad window. `mouse_keyboard.py`'s `type_text()` had no
+     mechanism at all to check what currently had OS keyboard focus; it just called
+     `pyautogui.typewrite()` and trusted the target was correct. Given the click-then-type steps ran back
+     to back with no wait for Notepad to actually finish launching, the keystrokes almost certainly raced
+     ahead of the new window gaining focus. Fixed with an actual verification, not a delay-and-hope: an
+     optional `expect_window_contains` argument that polls the real active window title before typing and
+     raises rather than typing blindly if the expected window never gains focus — plus a small settle
+     delay after clicks as a secondary, low-cost safeguard.
+- Issues NOT fixed / still open: the user has not yet re-run the desktop task against these two newest
+  fixes to directly confirm the test message now lands inside Notepad (rather than just confirming the new
+  code paths are individually unit-tested); DPI/multi-monitor scaling on click coordinates remains
+  completely unverified in any run to date.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 258/258 passed (249 previous + 4 prompt_ui + 4
+  mouse_keyboard + 1 action_router).
+- Result: **Pass**, with two more real bugs found and fixed — one of them (the gate accepting invalid
+  input as approval) a genuine safety-relevant finding, not just a functional one. This is the fifth and
+  sixth time in this project's history that testing against something more real than a mock — here, the
+  user's own live re-run — has surfaced a bug no test suite had, following 2026-07-13's profile bug,
+  2026-08-01's OCR `textord_min_linesize` bug, and the same day's planner-crash/schema-mismatch pair.
+
+### [2026-08-01] Debug pass — "the fix didn't work" investigation: episodic replay was the actual cause
+- Files checked: `src/memory/episodic_store.py`, `src/brain/orchestrator.py`'s replay path,
+  `src/action/mouse_keyboard.py`, plus the user's second desktop-task trace log.
+- Issue found: the user re-ran the identical desktop task after the previous entry's `expect_window_
+  contains` fix, and the test message landed in the terminal again — same symptom as before the fix. Before
+  assuming the fix itself was wrong, checked the trace log first: every step showed `"llm_call": false` and
+  the log opened with `"status": "replay_attempt", "source_episode_id": 6, "match_score": 1.0"`. This
+  confirmed the planner never ran at all for this task — `EpisodicStore.find_match()` matched the new
+  instruction against episode 6 (recorded during the FIRST, pre-fix desktop run) and replayed its stored
+  steps verbatim. Episode 6's step 4 had `params={"text": "This is a test message."}` with no
+  `expect_window_contains` key, because that field didn't exist when it was recorded — so the fix's own
+  check had nothing to check. The fix was correct; it just never got invoked. Root-caused and fixed with a
+  `STEP_SCHEMA_VERSION` gate on replay (see `docs/DECISIONS.md`'s matching 2026-08-01 entry for the full
+  mechanism) — this is a durable fix for the general class of problem, not just this one instance, since
+  any future safety-relevant schema change would have hit the identical failure mode.
+- Also addressed in the same pass, per the user's own diagnosis of the underlying mechanism (approving in
+  a terminal steals focus from the real target app): added active window re-activation (not just detection)
+  in `mouse_keyboard.py`, and an explicit `AUTO_APPROVE_EXTERNAL` opt-in flag that skips the External-risk
+  prompt entirely — never applying to Destructive, which keeps its confirm-phrase requirement unconditionally.
+- Issues NOT fixed / still open: the user has not yet re-run the desktop task against the combined set of
+  today's fixes (stale-episode exclusion + window re-activation) to directly confirm a clean end-to-end
+  result; DPI/multi-monitor scaling remains unverified in any run to date.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 270/270 passed (258 previous + 4 episodic-store +
+  3 mouse_keyboard + 3 gate + 2 config tests).
+- Result: **Pass.** This is a good illustration of a debugging discipline worth keeping in this log: when a
+  fix appears not to have worked, check whether it actually ran before assuming it's wrong — here the fix
+  was correct, the replay path had simply routed around it entirely.
+
+### [2026-08-01] Debug pass — a desktop-only task was needlessly dependent on Chrome launching at all
+- Files checked: `src/action/playwright_driver.py`, `src/brain/orchestrator.py`'s `_observe()`/
+  `_gate_context()`, `src/main.py`, `src/gui/worker.py`.
+- Issue found: the user's very next attempt at "open Notepad and type a test message" — a task with no
+  browser step anywhere in it — failed before a single step executed, with a `ChromeProfileLaunchError`
+  traceback. Traced to `main.py`'s `with PlaywrightDriver(...) as driver:` wrapping every task
+  unconditionally, and the driver's constructor launching Chrome immediately regardless of whether the
+  task would ever use it. Checked whether making construction lazy alone would be sufficient, and it would
+  not have been: `orchestrator._observe()` calls `driver.current_url()`/`current_title()` on every step
+  (to give the planner current screen context), which would immediately force a launch on the very first
+  observation regardless of the task type. Fixed both together — see `docs/DECISIONS.md`'s matching entry
+  for the full mechanism.
+- While spot-checking whether the GUI's separate entry point (`src/gui/worker.py`) had the same eager-
+  launch problem (it didn't need a separate fix, since it uses the same `PlaywrightDriver`/`Orchestrator`
+  classes), found two unrelated but real gaps: `worker.py` constructs its own `OCREngine`/
+  `ConfirmationGate` independently of `main.py`, and never received either the `TESSERACT_CMD` fix or the
+  `AUTO_APPROVE_EXTERNAL` feature added earlier in this same session — both were only ever wired into
+  `main.py`. Fixed by porting the identical wiring into `worker.py`.
+- Issues NOT fixed / still open: the user has not yet re-run the desktop task against this fix to confirm
+  it completes without ever touching Chrome; the `worker.py` port has not been live-tested in any
+  environment (GUI tests require PySide6, unavailable here) — it's a direct, minimal port of an
+  already-tested pattern, but that's not the same as having been run.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 277/277 passed (270 previous + 6
+  `test_playwright_driver.py` rewritten/new + 1 new `test_orchestrator.py`).
+- Result: **Pass**, plus a reminder worth generalizing: this project has two independent entry points
+  (`main.py` CLI, `src/gui/worker.py` GUI) sharing core logic, and a fix applied to one is not automatically
+  present in the other — worth a deliberate spot-check of both whenever a future cross-cutting config-
+  wiring change is made, rather than assuming parity.

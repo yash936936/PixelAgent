@@ -9,7 +9,7 @@ from src import config
 def _clean_env(monkeypatch):
     for key in (
         "GEMINI_API_KEY", "LLM_MODEL", "PLANNER_BACKEND", "LOCAL_PLANNER_ENDPOINT",
-        "RISK_MODEL_BACKEND", "LOCAL_RISK_MODEL_ENDPOINT",
+        "RISK_MODEL_BACKEND", "LOCAL_RISK_MODEL_ENDPOINT", "TESSERACT_CMD", "AUTO_APPROVE_EXTERNAL",
         "DEFAULT_CHROME_PROFILE", "PROFILES_DIR", "MAX_STEPS_PER_TASK", "LOG_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -54,6 +54,44 @@ def test_default_risk_model_backend_is_none(tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
     assert cfg.risk_model_backend == "none"
+
+
+def test_default_tesseract_cmd_is_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.tesseract_cmd is None
+
+
+def test_tesseract_cmd_is_loaded_when_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("TESSERACT_CMD", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.tesseract_cmd == r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+
+def test_default_auto_approve_external_is_false(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.auto_approve_external is False
+
+
+def test_auto_approve_external_true_is_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTO_APPROVE_EXTERNAL", "true")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.auto_approve_external is True
+
+
+def test_auto_approve_external_case_insensitive(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTO_APPROVE_EXTERNAL", "TRUE")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.auto_approve_external is True
 
 
 def test_risk_model_backend_semantic_is_accepted_with_no_endpoint(tmp_path, monkeypatch):

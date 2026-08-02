@@ -71,21 +71,29 @@ def check_gemini_live(cfg) -> CheckResult:
         return CheckResult("Gemini API (live call)", False, f"{type(exc).__name__}: {exc}")
 
 
-def check_tesseract() -> CheckResult:
+def check_tesseract(tesseract_cmd: str | None = None) -> CheckResult:
     try:
         import pytesseract
 
+        if tesseract_cmd:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
         version = pytesseract.get_tesseract_version()
-        return CheckResult("Tesseract OCR binary", True, f"found, version {version}")
+        source = f" (via TESSERACT_CMD={tesseract_cmd})" if tesseract_cmd else " (found on PATH)"
+        return CheckResult("Tesseract OCR binary", True, f"found, version {version}{source}")
     except ImportError:
         return CheckResult("Tesseract OCR binary", False, "pytesseract not installed (pip install -r requirements.txt)")
     except Exception as exc:  # noqa: BLE001 - covers TesseractNotFoundError etc.
+        hint = (
+            f"TESSERACT_CMD={tesseract_cmd!r} does not point at a working Tesseract binary"
+            if tesseract_cmd
+            else "pytesseract is installed but the Tesseract binary itself was not found on PATH"
+        )
         return CheckResult(
             "Tesseract OCR binary",
             False,
-            f"pytesseract is installed but the Tesseract binary itself was not found on PATH ({exc}). "
-            "Install from https://github.com/UB-Mannheim/tesseract/wiki and either add it to PATH or "
-            "set OCREngine(tesseract_cmd=...) explicitly.",
+            f"{hint} ({exc}). Install from https://github.com/UB-Mannheim/tesseract/wiki and either add "
+            "it to PATH or set TESSERACT_CMD in .env to the full path of tesseract.exe.",
         )
 
 
@@ -192,17 +200,17 @@ def run_diagnostics(live: bool = False) -> list[CheckResult]:
 
     config_result = check_config()
     results.append(config_result)
+    cfg = config.load() if config_result.passed else None
 
-    if live and config_result.passed:
-        cfg = config.load()
+    if live and cfg is not None:
         results.append(check_gemini_live(cfg))
 
-    results.append(check_tesseract())
+    results.append(check_tesseract(cfg.tesseract_cmd if cfg is not None else None))
     results.append(check_playwright_chromium())
     results.append(check_desktop_control())
 
-    if config_result.passed:
-        results.append(check_writable_dirs(config.load()))
+    if cfg is not None:
+        results.append(check_writable_dirs(cfg))
 
     results.append(check_semantic_layer())
 

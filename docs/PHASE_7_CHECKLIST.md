@@ -22,6 +22,12 @@ This checks, without executing any real task or click:
 Fix anything marked `✗` before continuing — `⚠` warnings only limit desktop-target-type steps, browser-only
 tasks are unaffected by them.
 
+**If Tesseract shows as installed but not found on PATH:** either add its install directory to your
+system PATH, or — often simpler — set `TESSERACT_CMD` in `.env` to the full path of `tesseract.exe`
+(typically `C:\Program Files\Tesseract-OCR\tesseract.exe`). See `.env.example` for the exact line to add.
+Both the doctor tool and the real app read this same setting, so once the doctor check passes, the app
+will find it too.
+
 Optionally add `--live` to make one real, minimal Gemini API call and confirm the key actually works
 end-to-end (this costs a trivial amount, not free, so it's opt-in):
 

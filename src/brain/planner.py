@@ -33,8 +33,26 @@ Respond with ONLY a JSON object, no other text, matching this schema:
   "action": "navigate" | "click" | "type" | "scroll" | "screenshot" | "done",
   "description": "short human-readable description of what this step does and why",
   "target_type": "web" | "desktop",
-  "params": { ... action-specific parameters, e.g. {"url": "..."} or {"selector": "...", "text": "..."} }
+  "params": { ... action-specific parameters, schema depends on target_type -- see below }
 }
+
+IMPORTANT: "params" has a DIFFERENT shape depending on "target_type". Getting this wrong makes
+the step fail to execute even though it looked reasonable, so follow this exactly:
+
+- target_type "web" (a browser page, e.g. Playwright): click/type use {"selector": "..."} (a CSS
+  selector or accessible role/text Playwright can resolve), e.g. {"selector": "text=Submit"}.
+- target_type "desktop" (a native OS window/app with no DOM, e.g. the Start menu, Notepad, a
+  Windows dialog): click/double_click do NOT use "selector" at all -- there is no DOM to select
+  against. Use EITHER {"target_text": "..."} (a short, visible on-screen text/label the perception
+  layer will locate via OCR, e.g. {"target_text": "Start"}) OR explicit {"x": <int>, "y": <int>}
+  screen coordinates if you already know them from a prior screenshot. Desktop "type" steps use
+  {"text": "..."} (types at the current focus, no target needed) and SHOULD also include
+  {"expect_window_contains": "..."} whenever the text is meant to go into a specific app/window
+  (e.g. after opening Notepad, use {"text": "...", "expect_window_contains": "Notepad"}) -- this is
+  verified for real before typing and prevents text landing in the wrong window if the target app is
+  still launching. Omit expect_window_contains only when typing into whatever already has focus is
+  actually intended (e.g. typing into a search box you just clicked into). Never put "selector" in a
+  target_type="desktop" step's params.
 
 If the task is already complete, respond with {"action": "done", "description": "...", "target_type": "web", "params": {}}.
 Never invent a step that isn't necessary for the instruction. Keep each step minimal and concrete."""
@@ -104,6 +122,19 @@ class HostedLLMPlanner(PlannerBackend):
     def next_step(
         self, instruction: str, screen_state: dict[str, Any], history: list[dict]
     ) -> dict[str, Any]:
+        """Retries once on a parse failure (docs/DECISIONS.md 2026-08-01):
+        Phase 7's first live browser run hit a real, observed failure mode
+        -- Gemini's response was truncated mid-JSON (missing closing
+        braces), which _parse_step correctly rejects rather than guessing
+        at repair, but the ORIGINAL behavior let that single bad generation
+        raise all the way out of run_task() and crash the whole process
+        with an unhandled traceback. A second attempt on the exact same
+        (instruction, screen_state, history) succeeded immediately when the
+        user re-ran the same command by hand -- strong evidence this is
+        transient generation variance, not a deterministic bug the retry
+        would just repeat. Bounded to ONE retry, not unbounded, so a truly
+        persistent failure (e.g. a real API outage) still surfaces as an
+        error rather than looping/spending API calls silently forever."""
         user_content = json.dumps(
             {
                 "instruction": instruction,
@@ -112,17 +143,29 @@ class HostedLLMPlanner(PlannerBackend):
             }
         )
 
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=user_content,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                response_mime_type="application/json",
-            ),
-        )
-        self.last_call_cost = self._estimate_cost_from_response(response)
-        raw_text = (response.text or "").strip()
-        return _parse_step(raw_text)
+        last_error: ValueError | None = None
+        for attempt in range(2):  # one real attempt + one retry on parse failure
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=user_content,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    response_mime_type="application/json",
+                ),
+            )
+            self.last_call_cost = self._estimate_cost_from_response(response)
+            raw_text = (response.text or "").strip()
+            try:
+                return _parse_step(raw_text)
+            except ValueError as exc:
+                last_error = exc
+                if attempt == 0:
+                    print(
+                        f"[warn] Planner returned unparseable output on attempt 1 "
+                        f"({exc}); retrying once before giving up."
+                    )
+
+        raise last_error  # both attempts failed -- surface the second attempt's error
 
     def _estimate_cost_from_response(self, response) -> float:
         """Reads real token counts off the Gemini response when available;
@@ -175,6 +218,11 @@ class LocalFineTunedPlanner(PlannerBackend):
     def next_step(
         self, instruction: str, screen_state: dict[str, Any], history: list[dict]
     ) -> dict[str, Any]:
+        """Same bounded-retry-on-parse-failure behavior as
+        HostedLLMPlanner.next_step -- see that method's docstring for why
+        (docs/DECISIONS.md 2026-08-01). Applies here too since a local
+        fine-tuned model can produce truncated/malformed output for the
+        same reasons a hosted one can."""
         user_content = json.dumps(
             {
                 "instruction": instruction,
@@ -182,8 +230,21 @@ class LocalFineTunedPlanner(PlannerBackend):
                 "steps_so_far": history,
             }
         )
-        raw_text = self._generate_fn(SYSTEM_PROMPT, user_content).strip()
-        return _parse_step(raw_text)
+
+        last_error: ValueError | None = None
+        for attempt in range(2):
+            raw_text = self._generate_fn(SYSTEM_PROMPT, user_content).strip()
+            try:
+                return _parse_step(raw_text)
+            except ValueError as exc:
+                last_error = exc
+                if attempt == 0:
+                    print(
+                        f"[warn] Planner returned unparseable output on attempt 1 "
+                        f"({exc}); retrying once before giving up."
+                    )
+
+        raise last_error
 
 
 # Backward-compat alias: this class was previously named LocalPlanner. Kept

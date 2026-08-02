@@ -80,11 +80,70 @@ def test_desktop_click_target_text_not_found_raises():
         router.execute(step)
 
 
+def test_desktop_click_falls_back_to_selector_when_target_text_missing():
+    """Real bug found by Phase 7's first-ever live desktop run
+    (docs/DECISIONS.md 2026-08-01): the planner emitted params={"selector":
+    "Start button"} for a desktop click instead of "target_text" -- an
+    easy mistake since "selector" is the correct key for web steps. This
+    must be treated as equivalent to target_text rather than failing the
+    whole task outright."""
+    router, driver, mouse_keyboard, ocr_engine = make_router(with_desktop=True)
+    mouse_keyboard.screenshot.return_value = "fake_image"
+    ocr_engine.read.return_value = [OCRWord(text="Start", bbox=(0, 0, 40, 20), confidence=95.0)]
+
+    step = {"action": "click", "target_type": "desktop", "params": {"selector": "Start"}}
+    outcome = router.execute(step)
+
+    ocr_engine.read.assert_called_once_with("fake_image")
+    assert outcome["status"] == "executed"
+
+
+def test_desktop_click_prefers_target_text_over_selector_when_both_present():
+    """If find_relevant_regions searched for "selector"'s value instead of
+    "target_text"'s, this would find no match (only "Save" is on screen)
+    and raise -- so a clean, non-raising click_at call is proof
+    target_text won."""
+    router, driver, mouse_keyboard, ocr_engine = make_router(with_desktop=True)
+    mouse_keyboard.screenshot.return_value = "fake_image"
+    ocr_engine.read.return_value = [OCRWord(text="Save", bbox=(0, 0, 40, 20), confidence=95.0)]
+
+    step = {
+        "action": "click", "target_type": "desktop",
+        "params": {"target_text": "Save", "selector": "irrelevant, not on screen"},
+    }
+    outcome = router.execute(step)
+    assert outcome["status"] == "executed"
+    mouse_keyboard.click_at.assert_called_once()
+
+
+def test_desktop_click_with_neither_target_text_nor_selector_still_raises():
+    router, driver, mouse_keyboard, ocr_engine = make_router(with_desktop=True)
+    step = {"action": "click", "target_type": "desktop", "params": {}}
+    with pytest.raises(ValueError, match="target_text"):
+        router.execute(step)
+
+
 def test_desktop_type_routes_to_mouse_keyboard():
     router, driver, mouse_keyboard, ocr_engine = make_router(with_desktop=True)
     step = {"action": "type", "target_type": "desktop", "params": {"text": "hello"}}
     router.execute(step)
-    mouse_keyboard.type_text.assert_called_once_with("hello")
+    mouse_keyboard.type_text.assert_called_once_with("hello", expect_window_contains=None)
+
+
+def test_desktop_type_passes_through_expect_window_contains():
+    """Real bug fix, docs/DECISIONS.md 2026-08-01: the planner can now
+    specify which window a type step should verify is focused before
+    typing, and action_router must pass it through rather than dropping
+    it on the floor."""
+    router, driver, mouse_keyboard, ocr_engine = make_router(with_desktop=True)
+    step = {
+        "action": "type", "target_type": "desktop",
+        "params": {"text": "This is a test message.", "expect_window_contains": "Notepad"},
+    }
+    router.execute(step)
+    mouse_keyboard.type_text.assert_called_once_with(
+        "This is a test message.", expect_window_contains="Notepad"
+    )
 
 
 def test_desktop_hotkey_routes_to_mouse_keyboard():

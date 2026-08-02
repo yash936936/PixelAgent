@@ -18,6 +18,19 @@ doing that (an earlier bug in this file) makes Chromium create a brand-new,
 empty "Default" profile inside that subfolder instead of opening the real,
 already-logged-in one, which is why a task could land on a logged-out
 marketing page instead of an authenticated inbox. See docs/DECISIONS.md.
+
+LAZY LAUNCH (2026-08-01, docs/DECISIONS.md): the constructor previously
+launched Chrome immediately and unconditionally, which meant a Chrome
+launch failure (a common one: real Chrome still holding the profile lock)
+could block even a purely desktop-only task (e.g. "open Notepad") that
+never touches a browser at all -- found live when exactly that happened.
+Chrome now only actually launches on the first real browser action
+(navigate/click/type/scroll/screenshot/current_url/current_title);
+constructing a PlaywrightDriver, and even entering/exiting it as a context
+manager, is now safe and free of any browser dependency for tasks that
+never need one. orchestrator.py's _observe() cooperates with this by
+checking `is_launched` before calling current_url()/current_title(), so
+building the planner's screen-state context doesn't itself force a launch.
 """
 from __future__ import annotations
 
@@ -35,42 +48,65 @@ class ChromeProfileLaunchError(Exception):
 class PlaywrightDriver:
     def __init__(self, profile_name: str, profiles_dir: Path, headless: bool = False) -> None:
         self._profile_name = profile_name
+        self._profiles_dir = profiles_dir
+        self._headless = headless
+        self._pw = None
+        self._context = None
+        self._page: Page | None = None
+
+    @property
+    def is_launched(self) -> bool:
+        """Whether Chrome has actually been launched yet -- False for the
+        entire lifetime of a driver that a purely desktop-only task never
+        calls a browser method on. orchestrator.py's _observe() checks this
+        before calling current_url()/current_title() so building screen
+        context for the planner never itself forces a launch."""
+        return self._context is not None
+
+    def _ensure_launched(self) -> None:
+        if self._context is not None:
+            return
+
         self._pw = sync_playwright().start()
-        user_data_dir = str(profiles_dir)
+        user_data_dir = str(self._profiles_dir)
 
         try:
             self._context = self._pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                headless=headless,
-                args=[f"--profile-directory={profile_name}"],
+                headless=self._headless,
+                args=[f"--profile-directory={self._profile_name}"],
             )
         except Exception as exc:  # noqa: BLE001 — re-raised with an actionable message
             self._pw.stop()
+            self._pw = None
             raise ChromeProfileLaunchError(
-                f"Could not launch Chrome against profile '{profile_name}' in "
+                f"Could not launch Chrome against profile '{self._profile_name}' in "
                 f"'{user_data_dir}'. The most common cause: your real Chrome is still "
                 f"open using this same profile — its lock file blocks a second instance "
                 f"from using it. Fully close Chrome (check the system tray/task manager, "
                 f"not just the window) and try again. Original error: {exc}"
             ) from exc
 
-        self._page: Page = (
-            self._context.pages[0] if self._context.pages else self._context.new_page()
-        )
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
 
     def navigate(self, url: str) -> None:
+        self._ensure_launched()
         self._page.goto(url, wait_until="domcontentloaded")
 
     def click(self, selector: str) -> None:
+        self._ensure_launched()
         self._page.click(selector, timeout=10_000)
 
     def type_text(self, selector: str, text: str) -> None:
+        self._ensure_launched()
         self._page.fill(selector, text, timeout=10_000)
 
     def scroll(self, delta_y: int = 500) -> None:
+        self._ensure_launched()
         self._page.mouse.wheel(0, delta_y)
 
     def screenshot(self, path: str) -> None:
+        self._ensure_launched()
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._page.screenshot(path=path)
 
@@ -83,14 +119,18 @@ class PlaywrightDriver:
         return self._profile_name
 
     def current_url(self) -> str:
+        self._ensure_launched()
         return self._page.url
 
     def current_title(self) -> str:
+        self._ensure_launched()
         return self._page.title()
 
     def close(self) -> None:
-        self._context.close()
-        self._pw.stop()
+        if self._context is not None:
+            self._context.close()
+        if self._pw is not None:
+            self._pw.stop()
 
     def __enter__(self) -> "PlaywrightDriver":
         return self
