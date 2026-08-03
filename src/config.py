@@ -79,6 +79,24 @@ class Config:
     # be an explicit, deliberate opt-in, never a silent default.
     auto_approve_external: bool = False
 
+    # Gemini rate-limit backoff tuning (2026-08-01, docs/DECISIONS.md): found
+    # live that the original hardcoded 3-attempt/uncapped-backoff retry could
+    # compound into 10+ minutes of total wait on a heavily-throttled
+    # free-tier key. Defaults to a much faster-failing tradeoff (2 attempts,
+    # capped at 20s) than the original; set RATE_LIMIT_MAX_ATTEMPTS=1 to
+    # disable the retry entirely and see rate-limit errors immediately, or
+    # raise these if you're on a higher-quota plan and prefer the agent to
+    # patiently ride out rate limits instead.
+    rate_limit_max_attempts: int = 2
+    rate_limit_max_backoff_seconds: float | None = 20.0
+
+    # Retention (2026-08-02, Phase 8, docs/DECISIONS.md): trace logs (.jsonl)
+    # and screenshots (.png) in log_dir older than this many days are
+    # deleted at process startup. Screenshots are the highest-risk artifact
+    # here (full-frame captures), so indefinite retention was deliberately
+    # not the default. <= 0 disables pruning entirely.
+    log_retention_days: int = 14
+
     def ensure_dirs(self) -> None:
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -94,7 +112,8 @@ def load(env_path: str | None = None) -> Config:
       LLM_MODEL, PLANNER_BACKEND, LOCAL_PLANNER_ENDPOINT, RISK_MODEL_BACKEND,
       LOCAL_RISK_MODEL_ENDPOINT, DEFAULT_CHROME_PROFILE,
       PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
-      TESSERACT_CMD, AUTO_APPROVE_EXTERNAL
+      TESSERACT_CMD, AUTO_APPROVE_EXTERNAL, RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_MAX_BACKOFF_SECONDS,
+      LOG_RETENTION_DAYS
     """
     load_dotenv(env_path)
 
@@ -137,6 +156,13 @@ def load(env_path: str | None = None) -> Config:
         langfuse_secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
         tesseract_cmd=os.environ.get("TESSERACT_CMD") or None,
         auto_approve_external=os.environ.get("AUTO_APPROVE_EXTERNAL", "false").strip().lower() == "true",
+        rate_limit_max_attempts=int(os.environ.get("RATE_LIMIT_MAX_ATTEMPTS", "2")),
+        rate_limit_max_backoff_seconds=(
+            None
+            if os.environ.get("RATE_LIMIT_MAX_BACKOFF_SECONDS", "").strip().lower() == "none"
+            else float(os.environ.get("RATE_LIMIT_MAX_BACKOFF_SECONDS", "20"))
+        ),
+        log_retention_days=int(os.environ.get("LOG_RETENTION_DAYS", "14")),
     )
     cfg.ensure_dirs()
     return cfg

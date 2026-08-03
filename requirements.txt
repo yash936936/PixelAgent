@@ -18,3 +18,11 @@ pillow==12.1.1
 # verified against this codebase. Verify it yourself on your target machine
 # (Windows) before relying on src/action/mouse_keyboard.py in production.
 pyautogui==0.9.54
+
+# Windows-only, for src/security/at_rest.py's encryption-at-rest of episodic/semantic memory
+# (docs/DECISIONS.md 2026-08-02, Phase 8). Not installable in this project's Linux build/test
+# environment -- src/security/at_rest.py detects its absence and degrades to plaintext storage
+# with a loud warning rather than failing. Install this on your real Windows machine to enable
+# encryption: `pip install pywin32`. Not pinned here since it could not be installed/verified in
+# this environment; verify it yourself on your target machine before relying on it in production.
+# pywin32==308

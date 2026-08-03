@@ -191,26 +191,42 @@ log, not just the eval harness.
 ---
 
 ## Phase 7 — First real live validation (Windows)
-**Status: substantially complete (2026-08-01) — both execution paths have completed a full task on real
-hardware; seven real bugs found and fixed in total, spanning the planner, the confirmation gate, episodic
-memory, window focus, and the browser launch lifecycle itself.** Browser task succeeded (after a transient
-truncated-JSON crash was fixed with a retry). Desktop task completed end-to-end on re-run (`status: done`)
-after fixing a planner/action_router schema mismatch, a safety-relevant confirmation-gate bug, and a
-window-focus verification gap. A re-run of the SAME task then hit two more real issues in sequence: first,
-episodic replay silently bypassing the planner (and the just-made fix) by reusing a pre-fix episode's
-stored steps verbatim — closed with a `STEP_SCHEMA_VERSION` replay gate — and then, once that was fixed,
-the task failed again on an unconditional Chrome launch for a task that never uses a browser at all —
-closed by making Chrome launch lazily and having `orchestrator._observe()` cooperate with that laziness.
-Also added, per the user's own diagnosis and explicit request: active window re-activation and an opt-in
-`AUTO_APPROVE_EXTERNAL` flag (never applies to Destructive). While fixing the Chrome-launch issue, found
-and fixed two gaps where earlier fixes had only been wired into the CLI path (`main.py`), never the GUI's
-(`src/gui/worker.py`). See `docs/DECISIONS.md`'s 2026-08-01 entries for all seven bugs and fixes. Not yet
-done: re-running the desktop task against this full combined set of fixes to confirm a fully clean
-end-to-end result with no browser dependency; DPI/multi-monitor scaling remains unverified in any run to
-date; the GUI-path port is unverified in any environment.
+**Status: COMPLETE (2026-08-02).** Both execution paths have now completed a full task on real Windows
+hardware with zero errors and zero replans needed — the browser path earlier in this cycle, and the
+desktop path confirmed clean on 2026-08-02 (`"open Notepad and type a test message"` → `status: done`, all
+4 steps `executed`, 0 replans, 0 errors, replayed from a stable stored episode at $0.00 cost). This
+satisfies the phase's own success criterion in full.
 
-Goal: close the "zero live validation" gap that has been honestly flagged since Phase 5 — the browser path
-has been live-run-tested once (2026-07-13, profile-launch bug); the desktop path never has.
+Nine distinct real bugs were found and fixed along the way, each root-caused from an actual trace rather
+than guessed at, and each covered by a new regression test:
+1. A transient truncated-JSON planner crash (now retried once before raising).
+2. A planner/`action_router` schema mismatch (`selector` vs `target_text` for desktop clicks) — fixed in
+   both the prompt and with a defensive fallback.
+3. A safety-relevant confirmation-gate bug: unrecognized CLI input silently fell through to "approved."
+4. A missing window-focus verification gap: a typed message landed in the terminal instead of the target
+   app.
+5. Stale episodic replay silently bypassing the planner (and thus bypassing fix #4) — closed with a
+   `STEP_SCHEMA_VERSION` replay gate.
+6. An unconditional Chrome launch blocking a purely desktop-only task that never used a browser — fixed by
+   making Chrome launch lazily, plus two related gaps found where earlier fixes had only been wired into
+   the CLI (`main.py`), never the GUI (`src/gui/worker.py`).
+7. A Gemini 429 rate-limit crash, then its own fix's compounding backoff (10+ minutes of wait) — both
+   fixed, the latter made fully configurable (`RATE_LIMIT_MAX_ATTEMPTS`/`RATE_LIMIT_MAX_BACKOFF_SECONDS`).
+8. An undocumented `hotkey` action forcing the planner into a fragile OCR click on the Start button in
+   every single trace — fixed by documenting it and recommending `{"keys": ["win"]}` explicitly.
+9. A type-then-hotkey timing race (typing into Windows search immediately followed by Enter, before the
+   search-results UI had populated) — fixed by giving `type_text()`/`press_hotkey()` the same post-action
+   settle delay `click_at()` already had.
+
+Full details for each are in `docs/DECISIONS.md`'s 2026-08-01/2026-08-02 entries.
+
+**What Phase 7 does NOT cover, and remains open:** real Windows DPI/multi-monitor scaling (no run so far
+has exercised non-100% display scaling); the `src/gui/worker.py` port of today's CLI-path fixes is
+unverified in any environment (GUI tests require PySide6, unavailable in this build environment).
+
+Goal (met): close the "zero live validation" gap that has been honestly flagged since Phase 5 — the
+browser path was live-run-tested first (2026-07-13, profile-launch bug); the desktop path is now confirmed
+clean as well (2026-08-02).
 
 | File | Description |
 |---|---|
@@ -218,21 +234,38 @@ has been live-run-tested once (2026-07-13, profile-launch bug); the desktop path
 | `src/action/mouse_keyboard.py` | First-ever live test of the desktop/OS-level mouse-keyboard path — a distinct code path from the browser branch, with genuinely zero real-world validation to date. |
 | *(observation only)* | Real Windows DPI/multi-monitor scaling against OCR-derived click coordinates — the `tests/integration/` harness deliberately fixed viewport size to sidestep this, so it remains untested until now. |
 
-**Phase 7 success criterion:** one full task completes end-to-end on real Windows hardware via each
-execution path (browser and desktop), with a real trace log to inspect for coordinate drift, OCR misses, or
-timing issues that no mock could reveal.
+**Phase 7 success criterion (MET, 2026-08-02):** one full task completes end-to-end on real Windows
+hardware via each execution path (browser and desktop), with a real trace log to inspect for coordinate
+drift, OCR misses, or timing issues that no mock could reveal.
 
 ---
 
 ## Phase 8 — Data security & retention
+**Status: COMPLETE (2026-08-02).** Design decision recorded first, per this phase's own requirement (see
+`docs/DECISIONS.md`'s 2026-08-02 entries for full reasoning): Windows DPAPI over a user-managed passphrase
+or separately-stored symmetric key, since DPAPI ties encryption to the current Windows user account with
+zero key file to manage, lose, or leak — the same mechanism Windows itself uses for saved Wi-Fi passwords.
+Retention: trace logs/screenshots in `logs/` pruned once older than `LOG_RETENTION_DAYS` (default 14) at
+process startup, not a background service.
+
 | File | Description |
 |---|---|
-| `src/memory/semantic_store.py`, `episodic_store.py` (updated) | Design pass for encryption-at-rest — key management/storage decision required first, deliberately not shortcut here. |
-| `src/observability/logger.py` (updated) | Screenshot/log retention policy (how long, where, encrypted or not) for the `logs/` directory. |
+| `src/security/at_rest.py` (new) | Windows DPAPI wrapper (`protect`/`unprotect`/`is_available`) — degrades to plaintext with a one-time loud warning on non-Windows platforms, matching the existing `MouseKeyboard`/`OCREngine` graceful-degradation pattern. |
+| `src/memory/semantic_store.py`, `episodic_store.py` (updated) | Sensitive columns (`instruction`, `normalized_instruction`, `steps_json`, `value_json`) encrypted via `at_rest.protect()` before every write, decrypted transparently on every read — `find_match()`'s difflib matching logic unaffected, since decryption happens immediately after fetch, before any comparison. |
+| `src/observability/logger.py` (updated) | New `prune_old_logs(log_dir, retention_days)` — deletes `.jsonl`/`.png` files older than `retention_days`; `<= 0` disables pruning entirely rather than deleting everything. |
+| `src/config.py` (updated) | New `log_retention_days` field (env `LOG_RETENTION_DAYS`, default 14). No toggle added for disabling encryption itself — no legitimate reason a user would want to turn off a transparent, free protection. |
+| `src/main.py`, `src/gui/worker.py` (updated) | Both call `prune_old_logs()` once at startup — done together in the same pass this time, learning from Phase 7's earlier CLI/GUI-parity miss (`TESSERACT_CMD`/`AUTO_APPROVE_EXTERNAL` had only been wired into `main.py` initially). |
+| `src/doctor.py` (updated) | New `check_encryption_at_rest()` — reports whether DPAPI is actually available, non-blocking either way. |
 
-**Phase 8 success criterion:** a documented, reviewed design decision (recorded in `docs/DECISIONS.md`) for
-where keys live and how long screenshots/logs persist — before any live run touches a real, personal Chrome
-profile with real account data.
+**Phase 8 success criterion (MET, 2026-08-02):** a documented, reviewed design decision (recorded in
+`docs/DECISIONS.md`) for where keys live and how long screenshots/logs persist — before any live run
+touches a real, personal Chrome profile with real account data.
+
+**Not yet verified:** none of this has been exercised against real DPAPI — `pywin32` cannot be installed in
+this project's Linux build/test environment, so every test uses a reversible fake standing in for
+`win32crypt`. Confirm on a real Windows machine (after `pip install pywin32`) that `python -m src.doctor`
+reports encryption as available, and that existing episodic/semantic memory continues to work correctly
+after upgrading.
 
 ---
 

@@ -38,6 +38,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from src.security import at_rest
+
 # Bump this whenever a change to the step schema is safety-relevant enough
 # that an old, differently-shaped step should never be silently replayed
 # instead of re-planned. Current value bumped to 2 on 2026-08-01 for the
@@ -130,8 +132,10 @@ class EpisodicStore:
             "INSERT INTO episodes (instruction, normalized_instruction, steps_json, status, edited, "
             "created_at, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                instruction, _normalize(instruction), json.dumps(steps), status, int(edited),
-                time.time(), STEP_SCHEMA_VERSION,
+                at_rest.protect(instruction),
+                at_rest.protect(_normalize(instruction)),
+                at_rest.protect(json.dumps(steps)),
+                status, int(edited), time.time(), STEP_SCHEMA_VERSION,
             ),
         )
         self._conn.commit()
@@ -158,13 +162,14 @@ class EpisodicStore:
         ).fetchall()
 
         for row_id, orig_instruction, norm_instruction, steps_json, status, edited, created_at in rows:
+            norm_instruction = at_rest.unprotect(norm_instruction)
             score = SequenceMatcher(None, normalized, norm_instruction).ratio()
             if score > best_score:
                 best_score = score
                 best = Episode(
                     id=row_id,
-                    instruction=orig_instruction,
-                    steps=json.loads(steps_json),
+                    instruction=at_rest.unprotect(orig_instruction),
+                    steps=json.loads(at_rest.unprotect(steps_json)),
                     status=status,
                     created_at=created_at,
                     edited=bool(edited),
@@ -181,7 +186,8 @@ class EpisodicStore:
             "ORDER BY created_at DESC"
         ).fetchall()
         return [
-            Episode(id=r[0], instruction=r[1], steps=json.loads(r[2]), status=r[3],
+            Episode(id=r[0], instruction=at_rest.unprotect(r[1]),
+                    steps=json.loads(at_rest.unprotect(r[2])), status=r[3],
                     edited=bool(r[4]), created_at=r[5])
             for r in rows
         ]
@@ -199,7 +205,8 @@ class EpisodicStore:
             ("done",),
         ).fetchall()
         return [
-            Episode(id=r[0], instruction=r[1], steps=json.loads(r[2]), status=r[3],
+            Episode(id=r[0], instruction=at_rest.unprotect(r[1]),
+                    steps=json.loads(at_rest.unprotect(r[2])), status=r[3],
                     edited=bool(r[4]), created_at=r[5])
             for r in rows
         ]

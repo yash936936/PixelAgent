@@ -20,6 +20,16 @@ best-effort heuristic (key-name matching), not a guarantee -- it can't catch
 a credential embedded in a differently-named field or inside free-text --
 so it doesn't replace avoiding credential entry via this agent where
 possible, but it closes the most common, easily-avoidable leak.
+
+Retention (2026-08-02, Phase 8, docs/DECISIONS.md): trace logs (.jsonl) and
+screenshots (.png -- the highest-risk artifact here, since a gate-context or
+verification screenshot is a full-frame capture that can show far more than
+a step's own redacted params) are pruned once anything older than
+LOG_RETENTION_DAYS (config.py, default 14) via prune_old_logs(), called once
+at process startup (main.py/worker.py), not as a background service -- this
+is a desktop tool that isn't continuously running, so startup is the
+natural point to do it. See docs/DECISIONS.md's Phase 8 entry for why
+episodic/semantic memory (encryption, not deletion) is handled differently.
 """
 from __future__ import annotations
 
@@ -38,6 +48,43 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _REDACTED = "[REDACTED]"
+
+# File extensions this pruning function ever considers for deletion --
+# deliberately narrow (trace logs and screenshots only) rather than a
+# blanket "delete anything old in this directory", so it can never touch
+# something unexpected a future file type might place in the same folder.
+_PRUNABLE_EXTENSIONS = (".jsonl", ".png")
+
+
+def prune_old_logs(log_dir: Path, retention_days: int) -> int:
+    """Deletes trace logs (.jsonl) and screenshots (.png) in log_dir older
+    than retention_days, per the Phase 8 design decision (docs/DECISIONS.md
+    2026-08-02). Returns the number of files deleted. Called once at
+    process startup (main.py/worker.py), not as a background service.
+
+    retention_days <= 0 disables pruning entirely (returns 0 immediately)
+    -- treated as "keep everything," not "delete everything," since a
+    silent mass-deletion on a misconfigured value would be a far worse
+    failure mode than doing nothing."""
+    if retention_days <= 0:
+        return 0
+    if not log_dir.exists():
+        return 0
+
+    cutoff = datetime.now(timezone.utc).timestamp() - (retention_days * 86400)
+    deleted = 0
+    for path in log_dir.iterdir():
+        if not path.is_file() or path.suffix.lower() not in _PRUNABLE_EXTENSIONS:
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            # Best-effort: a file locked by another process (e.g. the
+            # current task's own still-open log) is skipped, not fatal.
+            continue
+    return deleted
 
 
 def _redact_step(step: dict | None) -> dict | None:

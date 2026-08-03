@@ -10,6 +10,7 @@ def _clean_env(monkeypatch):
     for key in (
         "GEMINI_API_KEY", "LLM_MODEL", "PLANNER_BACKEND", "LOCAL_PLANNER_ENDPOINT",
         "RISK_MODEL_BACKEND", "LOCAL_RISK_MODEL_ENDPOINT", "TESSERACT_CMD", "AUTO_APPROVE_EXTERNAL",
+        "RATE_LIMIT_MAX_ATTEMPTS", "RATE_LIMIT_MAX_BACKOFF_SECONDS", "LOG_RETENTION_DAYS",
         "DEFAULT_CHROME_PROFILE", "PROFILES_DIR", "MAX_STEPS_PER_TASK", "LOG_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -92,6 +93,45 @@ def test_auto_approve_external_case_insensitive(tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
     assert cfg.auto_approve_external is True
+
+
+def test_default_rate_limit_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.rate_limit_max_attempts == 2
+    assert cfg.rate_limit_max_backoff_seconds == 20.0
+
+
+def test_rate_limit_max_attempts_is_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.rate_limit_max_attempts == 1
+
+
+def test_rate_limit_max_backoff_seconds_none_disables_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("RATE_LIMIT_MAX_BACKOFF_SECONDS", "none")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.rate_limit_max_backoff_seconds is None
+
+
+def test_default_log_retention_days(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.log_retention_days == 14
+
+
+def test_log_retention_days_is_parsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOG_RETENTION_DAYS", "30")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.log_retention_days == 30
 
 
 def test_risk_model_backend_semantic_is_accepted_with_no_endpoint(tmp_path, monkeypatch):

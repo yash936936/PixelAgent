@@ -66,8 +66,15 @@ class TaskWorker(QThread):
 
     def run(self) -> None:
         from src.gui.gui_logger import GuiLogger  # local import: keeps logger.py Qt-free
+        from src.observability.logger import prune_old_logs
 
         try:
+            # Phase 8 (2026-08-02, docs/DECISIONS.md): same day-based
+            # retention pruning as main.py's CLI path -- run once here too
+            # rather than assuming main.py's own pruning already covered
+            # it, since a GUI-only user may never invoke the CLI at all.
+            prune_old_logs(self._cfg.log_dir, self._cfg.log_retention_days)
+
             logger = GuiLogger(
                 self._cfg.log_dir,
                 on_step=lambda rec: self.step_logged.emit(rec),
@@ -76,7 +83,12 @@ class TaskWorker(QThread):
 
             from src.brain.planner import HostedLLMPlanner
 
-            planner = HostedLLMPlanner(api_key=self._cfg.gemini_api_key, model=self._cfg.llm_model)
+            planner = HostedLLMPlanner(
+                api_key=self._cfg.gemini_api_key,
+                model=self._cfg.llm_model,
+                rate_limit_max_attempts=self._cfg.rate_limit_max_attempts,
+                rate_limit_max_backoff_seconds=self._cfg.rate_limit_max_backoff_seconds,
+            )
             # Fix (2026-08-01, docs/DECISIONS.md): auto_approve_external was wired into main.py's
             # ConfirmationGate but never ported to this GUI worker path -- found while checking whether
             # a related lazy-launch fix also needed porting here. Defaults to False via cfg, so this is

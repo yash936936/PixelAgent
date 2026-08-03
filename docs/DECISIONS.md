@@ -818,3 +818,282 @@ Phase 3 build
   reach `driver.current_url()`/`current_title()` when unlaunched). Not yet done: the user has not yet
   re-run the desktop task against this fix to confirm it no longer depends on Chrome at all; the GUI-path
   fixes in `worker.py` have not been live-verified in either build environment.
+
+### [2026-08-01] Gemini 429 rate-limit error crashed the whole task — added backoff-and-retry
+- **Type:** Overwrite
+- **File(s) affected:** `src/brain/planner.py`, `tests/brain/test_planner.py`.
+- **What changed:** The user's next attempt hit a fresh unhandled traceback:
+  `google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED` — their Gemini free-tier key is limited to 5
+  requests/minute for the configured model, and the task exhausted that quota mid-run (worsened by the
+  same-day retry-on-truncated-JSON fix, which can itself use up to 2 calls per step). This exception type
+  is completely different from the `ValueError` the existing parse-failure retry loop catches, so it was
+  never touched by that fix and crashed straight through. Added a separate, dedicated retry path:
+  `_generate_with_rate_limit_retry()` catches `genai_errors.APIError` specifically, and ONLY when
+  `exc.code == 429` — any other API error (a bad key, a real server fault) is never silently retried and
+  raises immediately, since retrying those would hide a real problem rather than ride out a transient one.
+  On a genuine 429, reads the API's own suggested wait time out of the error body
+  (`google.rpc.RetryInfo.retryDelay`, e.g. `"30s"`) rather than guessing a fixed delay, sleeps, and retries
+  up to 3 attempts total before giving up and raising the real error — so a persistently exhausted quota
+  (e.g. genuinely out for the day) still surfaces as an error rather than retrying forever. Prints a clear,
+  actionable warning on each retry naming the free-tier quota explicitly, since this is very likely to
+  recur for a user on this specific plan.
+- **Why:** Same pattern as every other entry today — real, unhandled crash found on a live run, fixed with
+  a targeted retry rather than a broad catch-and-hope. Kept deliberately separate from the parse-failure
+  retry loop (different exception type, different recovery strategy, different reason it's safe to retry)
+  rather than merged into one generic retry-anything loop, which would make both harder to reason about
+  and risk silently retrying something (like a bad API key) that should fail loudly instead.
+- **Impacts:** 277 → 281 tests passing (+4: retry-then-succeed on a 429, exhausting all retries still
+  raises the real error, a non-429 API error is never retried at all, plus fixing an unrelated structural
+  slip from an earlier edit today where a test function's `def` line had been accidentally swallowed —
+  caught immediately by running the file and seeing the next test's setup code appear unindented/orphaned
+  inside the previous test). Does not change the underlying quota limit itself — a user hitting this
+  repeatedly still needs to either slow down between tasks or move off the free tier; the fix only
+  prevents a single rate-limit hit from crashing an otherwise-recoverable task.
+
+### [2026-08-01] Rate-limit retry made configurable — the previous fix's default compounded into 10+
+  minutes of wait
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/brain/planner.py`, `src/config.py`, `src/main.py`, `src/gui/worker.py`,
+  `.env.example`, `tests/brain/test_planner.py`, `tests/test_config.py`.
+- **What changed:** The user reported a task taking 10+ minutes to reach its first approval prompt on a
+  free-tier key — a direct, if unintended, consequence of the immediately preceding entry's fix. The
+  original rate-limit retry was hardcoded to 3 attempts with no cap on the server-suggested backoff
+  (`RetryInfo.retryDelay`, which the free tier can suggest as ~30s+ per attempt); on a key capped at a few
+  requests/minute, several rate-limited steps in a row could each individually wait up to ~60s, compounding
+  across a multi-step task into the wait the user saw. Rather than revert the crash fix (which would
+  reintroduce the earlier unhandled-429 crash), made both the attempt count and the backoff cap
+  configurable, with a faster-failing default than before: `HostedLLMPlanner` now accepts
+  `rate_limit_max_attempts` (default 2, was hardcoded 3) and `rate_limit_max_backoff_seconds` (default 20,
+  caps whatever the server suggests; pass `None` to trust the server uncapped, the original behavior).
+  Wired through `config.py`'s new `RATE_LIMIT_MAX_ATTEMPTS`/`RATE_LIMIT_MAX_BACKOFF_SECONDS` env vars into
+  both `main.py`'s and `src/gui/worker.py`'s planner construction (kept in parity per the earlier
+  entry's CLI/GUI-parity lesson). Setting `RATE_LIMIT_MAX_ATTEMPTS=1` disables the retry entirely — the
+  real error surfaces immediately instead of ever sleeping, for a user who'd rather see the failure right
+  away than wait.
+- **Why:** A hardcoded one-size-fits-all backoff was wrong for a user on a heavily-throttled free-tier key
+  even though it was correct in preventing the original crash — the right fix is giving control over the
+  tradeoff (patience vs. speed) rather than picking one default for every quota tier. This also directly
+  addresses the user's request to "revert" without actually reintroducing the crash the previous entry
+  fixed: the new default (2 attempts, 20s cap) still rides out a single brief rate-limit hit, but a full
+  disable is one env var away.
+- **Impacts:** 281 → 287 tests passing (+6: fail-fast-with-1-attempt-never-sleeps, backoff-is-capped,
+  new-defaults-pinned-directly in `test_planner.py`; default/parsed/none-disables-cap in
+  `test_config.py`), plus fixing the exhausted-retries test's now-stale hardcoded `== 3` assertion for the
+  new default of 2. Not yet done: the user has not yet re-run the desktop task with the new, faster
+  defaults to confirm the wait is meaningfully shorter in practice.
+
+### [2026-08-02] Three live desktop-task traces reviewed — Start-menu clicking made unreliable-by-design;
+  fixed with a hotkey the planner didn't know existed; window re-activation made periodic
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `src/brain/planner.py` (SYSTEM_PROMPT), `src/action/mouse_keyboard.py`,
+  `tests/brain/test_planner.py`, `tests/action/test_mouse_keyboard.py`.
+- **What changed:** The user shared three separate desktop-task trace logs. One thing worth noting first:
+  the `expect_window_contains` fix from 2026-08-01 worked exactly as designed in the third trace — it
+  correctly detected that VS Code (where the user was actively viewing the trace log) had focus instead of
+  Notepad, and refused to type the test message into it, raising a clear error instead of silently typing
+  into the wrong window. That is the fix doing its job, not a new bug. Two real, separate issues were
+  found across the three traces:
+  1. **Every single trace needed a mid-task replan just to click the Start button.** `action_router.py`
+     already had a working `hotkey` action (verified: it dispatches straight to
+     `mouse_keyboard.press_hotkey()`, no OCR involved at all) — but `SYSTEM_PROMPT` never mentioned it
+     existed, so the planner always tried `{"action": "click", "target_type": "desktop", "params":
+     {"target_text": "Start"}}` first, which the small taskbar icon made unreliable enough to trigger a
+     replan in every trace (the replanner's own fallback used raw pixel coordinates to click the taskbar
+     corner — itself fragile across different screen resolutions/taskbar layouts). Fixed by documenting
+     the `hotkey` action in the prompt and explicitly instructing the planner to prefer
+     `{"action": "hotkey", "target_type": "desktop", "params": {"keys": ["win"]}}` for opening the Start
+     menu — pressing the physical Windows key needs no perception step and can't miss a click target,
+     since it isn't a click at all.
+  2. **The window re-activation fix from 2026-08-01 only ever tried once, too early to help a
+     cold-launching app.** In the third trace, `type_text()`'s single activation attempt for "Notepad"
+     happened, but the active window 5 seconds later was still VS Code — plausible explanation: Notepad's
+     window may not have existed yet at the exact moment the one allowed attempt fired, since a cold app
+     launch isn't instant. Fixed by retrying activation periodically throughout the timeout window (every
+     `_ACTIVATION_RETRY_INTERVAL_SECONDS` = 2s) instead of only once, and raising
+     `DEFAULT_FOCUS_TIMEOUT_SECONDS` from 5.0 to 10.0 to give a slow-launching app more real time to
+     appear and be found.
+- **Why:** Direct response to reviewing real trace evidence rather than reacting to a single error message
+  — the first issue (hotkey never documented) was found by checking what `action_router.py` already
+  supported versus what `SYSTEM_PROMPT` told the planner about, and the second by reasoning through why a
+  fix that's provably working correctly (per trace 3) still couldn't recover a specific case in time.
+- **Impacts:** 287 → 289 tests passing (+2 net: one test renamed/clarified — activation-not-spammed-within-
+  a-short-timeout — and one new test proving activation is now retried more than once across a longer
+  timeout window using a fake monotonic clock; plus a new `test_planner.py` test pinning that
+  `SYSTEM_PROMPT` documents the hotkey action and the Start-menu preference). Not yet done: the user has
+  not yet re-run the desktop task with these changes to confirm the Start-menu step no longer needs a
+  replan and Notepad reliably gains focus in time.
+
+### [2026-08-02] The hotkey fix worked for Start, then a new race appeared: typing outran Windows'
+  search-results UI, "Enter" did nothing, and the resulting replan chain never recovered
+- **Type:** Overwrite
+- **File(s) affected:** `src/action/mouse_keyboard.py`, `tests/action/test_mouse_keyboard.py`.
+- **What changed:** The user re-ran the desktop task with the previous entry's `hotkey` fix in place, and
+  it worked exactly as intended -- `{"action": "hotkey", "params": {"keys": ["win"]}}` opened the Start
+  menu with no OCR/replan needed at all (confirmed via replay from a matching prior episode). A new,
+  different race then appeared one step later: `{"action": "type", "params": {"text": "notepad"}}`
+  executed, immediately followed by `{"action": "hotkey", "params": {"keys": ["enter"]}}` to launch the
+  top search result -- but `orchestrator._execute_and_verify()`'s pixel-diff check correctly detected the
+  screen had NOT visibly changed after pressing Enter (Windows' search-results panel likely hadn't
+  finished populating/highlighting the top match yet), which is exactly the kind of self-correction that
+  mechanism exists for. The problem was what happened next: the replanner corrected to a click on
+  `target_text: "Notepad"`, but by the time that ran, the Start menu state had already shifted, and OCR
+  found nothing (`"Could not locate an on-screen element matching 'Notepad'"`). This ping-ponged between
+  "press Enter again" and "click Notepad" for the replanner's full retry budget before exhausting and
+  ending the task in `status: error`. Root cause: `mouse_keyboard.py`'s `click_at()`/`double_click_at()`
+  already had a post-action settle delay (`_POST_CLICK_SETTLE_SECONDS = 0.3`) for exactly this class of
+  race, but `type_text()` and `press_hotkey()` had none at all -- so a `type` step immediately followed by
+  a `hotkey` step had nothing slowing it down. Fixed by adding the same settle-delay pattern to both:
+  `_POST_TYPE_OR_HOTKEY_SETTLE_SECONDS = 0.4` after `type_text()` finishes typing and after
+  `press_hotkey()` fires.
+- **Why:** Same root-cause family as several earlier entries today (click-then-type races,
+  activation-too-early races) -- this project's OS-level actions fire essentially instantly, while real
+  Windows UI transitions (search results populating, a menu updating) take a nonzero, variable amount of
+  time. `click_at` already had the right instinct (settle before returning); `type_text`/`press_hotkey`
+  simply hadn't been given the same treatment yet, and this was the first live trace to actually exercise
+  a type-then-hotkey sequence closely enough in time to expose the gap.
+- **Impacts:** 289 → 291 tests passing (+2: pinning that `type_text` and `press_hotkey` each sleep for
+  `_POST_TYPE_OR_HOTKEY_SETTLE_SECONDS` after acting). Not yet done: the user has not yet re-run the
+  desktop task to confirm the Enter-after-search-typing step now succeeds on the first attempt without
+  needing the replanner at all.
+
+### [2026-08-02] Phase 7 desktop path confirmed clean — first fully error-free, replan-free desktop task
+- **Type:** Confirmation (no code changes)
+- **What happened:** The user re-ran `"open Notepad and type a test message"` immediately after the
+  settle-delay fix above. Result: `status: done`, all 4 steps `executed` with zero replans and zero
+  errors — `hotkey(["win"])` opened Start, `type("notepad")` searched, `hotkey(["enter"])` launched
+  Notepad on the first attempt (no verification mismatch this time, confirming the settle delay closed
+  the race), and the final `type(..., expect_window_contains="Notepad")` both passed its real focus check
+  and landed correctly. Replayed via the matching episode (0 LLM calls, `$0.00` cost) rather than
+  re-planned fresh, which is itself a good sign: the stored step sequence -- including the settle-delay
+  fix's effects -- is now stable enough to be trusted for reuse.
+- **Why this matters:** This is the first completely clean run of the desktop execution path in this
+  project's history -- every other desktop-path attempt today needed at least one fix, replan, or both.
+  It's the concrete evidence `docs/PHASES.md`'s Phase 7 success criterion asked for: "one full task
+  completes end-to-end on real Windows hardware via each execution path (browser and desktop), with a
+  real trace log to inspect." The browser path was confirmed clean earlier this session; the desktop path
+  is confirmed clean now.
+- **Impacts:** `docs/PHASES.md`'s Phase 7 marked complete. Total bugs found and fixed across Phase 7's
+  live-run cycle: eight distinct issues (planner JSON-truncation crash, planner/action_router schema
+  mismatch, confirmation-gate invalid-input-silently-approves, missing window-focus verification, stale
+  episodic replay bypassing fixes, unconditional Chrome launch blocking desktop-only tasks, Gemini
+  429-rate-limit crash plus its own compounding-backoff follow-up, undocumented `hotkey` action forcing
+  fragile OCR clicks, and a type-then-hotkey timing race) -- each found from a real trace, root-caused
+  before fixing, and covered by a new regression test. What Phase 7 does NOT cover, unchanged: real Windows
+  DPI/multi-monitor scaling (no run so far has exercised non-100% scaling), and the `src/gui/worker.py`
+  port of today's CLI-path fixes remains unverified in any environment (GUI tests require PySide6).
+
+### [2026-08-02] Phase 8 design decision — encryption-at-rest via Windows DPAPI, day-based log/screenshot
+  retention (design first, per this phase's own success criterion)
+- **Type:** Design decision (recorded before implementation, as `docs/PHASES.md`'s Phase 8 explicitly
+  requires -- "key management/storage decision required first, deliberately not shortcut here").
+- **Threat model, stated explicitly:** this is a single-user Windows desktop agent, not a multi-tenant
+  server. The realistic risk being addressed is NOT a fully remote attacker with an active session or
+  admin rights on the machine -- if someone has that, no application-level encryption meaningfully helps
+  (they can read process memory, install a keylogger, or just watch the screen). The realistic risk is:
+  (a) another local account on a shared machine reading these files without this user's Windows login
+  session, or (b) the machine/drive later being lost, stolen, resold, or backed up somewhere (cloud sync,
+  an old drive) and read by someone without this specific Windows user account's credentials. That is a
+  narrower, more honest claim than "encrypted," and it's the claim actually being made here.
+- **Decision: Windows DPAPI (`CryptProtectData`/`CryptUnprotectData`), not a user-managed passphrase or a
+  separately-stored symmetric key.** Rejected alternatives and why:
+  - A user-supplied passphrase adds friction (another secret to remember, entered how -- a prompt on every
+    run?) and doesn't actually raise the security bar much here, since `GEMINI_API_KEY` already sits in
+    plaintext in `.env` right next to these databases -- protecting the episodic/semantic stores with a
+    passphrase while the API key sits in the clear one file over is security theater, not a real
+    improvement, unless `.env` itself is also protected (out of scope for this phase, see below).
+  - A separately-generated symmetric key (e.g. Fernet) stored in its own file has the exact same "where
+    does the key live" problem this phase is explicitly meant to resolve, just moved one file over --
+    it doesn't remove the key-management question, it relocates it.
+  - DPAPI ties encryption to the current Windows user account and machine automatically, with zero key
+    file to manage, lose, or leak -- it's the same mechanism Windows itself uses for saved Wi-Fi
+    passwords and Chrome's own saved-password store, so it's a well-understood, appropriate choice for
+    exactly this threat model on exactly this platform.
+- **What gets encrypted:** `episodic_store.py`'s `instruction`/`normalized_instruction`/`steps_json`
+  columns (task text and the full step sequence, which can include typed content) and
+  `semantic_store.py`'s `value_json` column (learned facts/preferences). Matching logic
+  (`find_match()`'s difflib comparison) still works: rows are decrypted in Python immediately after
+  fetching, before any comparison runs, so the encryption is transparent to every existing caller.
+- **Graceful degradation, matching this project's existing pattern for `MouseKeyboard`/`OCREngine`:** DPAPI
+  is only available on Windows via `pywin32`. In this build/test environment (Linux, no `pywin32`), and on
+  any other non-Windows environment, encryption is unavailable -- the code detects this, stores plaintext,
+  and prints a loud, explicit warning on first use rather than silently no-op'ing. This is a real
+  known-and-flagged gap on non-Windows dev/test setups, not a silent security regression.
+- **Retention: day-based pruning of `logs/`, not indefinite storage.** Screenshots (full-frame captures at
+  a point in time -- the highest-risk artifact, since a gate-context or verification screenshot can
+  capture far more than the step's own redacted `params`) and trace logs are deleted once older than
+  `LOG_RETENTION_DAYS` (config, default 14). Checked and pruned once at process startup (`main.py`/
+  `worker.py`), not a background service -- this is a desktop tool that isn't always running, so
+  startup-time pruning is the natural point to do it. Episodic/semantic memory databases are NOT
+  time-pruned the same way -- their entire value is persisting for replay/learning, so age-based deletion
+  there would defeat their purpose; encryption (above) is the relevant protection for those instead.
+- **Explicitly out of scope for this phase, and why:** `.env`'s plaintext `GEMINI_API_KEY` is a real,
+  known gap, but protecting it meaningfully would mean OS-level credential storage (e.g. Windows Credential
+  Manager) requiring a larger config-loading redesign, and doesn't block the specific screenshot/log-content
+  risk this phase targets. Encrypting `.env` without also addressing it is deferred to a future pass rather
+  than half-solved here.
+- **Phase 8 success criterion, met by this entry:** a documented, reviewed design decision for where keys
+  live (Windows DPAPI, tied to the OS user account, no separate key file) and how long screenshots/logs
+  persist (`LOG_RETENTION_DAYS`, default 14, pruned at startup) is now recorded here, before implementation
+  below.
+
+### [2026-08-02] Phase 8 implementation — encryption-at-rest and log/screenshot retention, per the design
+  decision above
+- **Type:** New (multiple) + Overwrite (multiple)
+- **File(s) affected:** `src/security/at_rest.py` (new), `src/memory/episodic_store.py`,
+  `src/memory/semantic_store.py`, `src/observability/logger.py`, `src/config.py`, `src/main.py`,
+  `src/gui/worker.py`, `src/doctor.py`, `requirements.txt`, `.env.example`,
+  `tests/security/test_at_rest.py` (new), `tests/memory/test_episodic_store.py`,
+  `tests/memory/test_semantic_store.py`, `tests/observability/test_logger.py`, `tests/test_config.py`,
+  `tests/test_doctor.py`.
+- **What changed:**
+  1. **`src/security/at_rest.py`**: thin wrapper around `win32crypt.CryptProtectData`/
+     `CryptUnprotectData` (`protect(str) -> str`, `unprotect(str) -> str`, `is_available() -> bool`).
+     Encrypted output is hex-encoded so it round-trips safely through SQLite TEXT columns. Degrades to
+     returning plaintext unchanged, with a one-time loud warning, when `pywin32` isn't installed or the
+     platform isn't Windows — matching this project's existing graceful-degradation pattern for
+     `MouseKeyboard`/`OCREngine`. `unprotect()` also falls back to returning its input unchanged if the
+     value isn't valid hex-encoded ciphertext, so pre-Phase-8 (or DPAPI-unavailable-at-write-time)
+     plaintext rows in an existing database stay readable rather than crashing.
+  2. **`episodic_store.py`**: `instruction`, `normalized_instruction`, and `steps_json` are encrypted via
+     `at_rest.protect()` before every `INSERT`, and decrypted via `at_rest.unprotect()` in every read path
+     (`find_match`, `all_episodes`, `flagged_for_review`). `find_match()`'s difflib matching logic is
+     unaffected — decryption happens immediately after fetching each row, before any comparison runs, so
+     every existing caller keeps working exactly as before.
+  3. **`semantic_store.py`**: `value_json` (learned facts/preferences) encrypted/decrypted the same way,
+     in `set_fact`/`get_fact`/`all_facts`.
+  4. **`logger.py`**: new `prune_old_logs(log_dir, retention_days) -> int` — deletes `.jsonl` trace logs
+     and `.png` screenshots older than `retention_days` (deliberately narrow file-extension allowlist, so
+     it can never touch an unexpected file type sharing the same directory). `retention_days <= 0`
+     disables pruning entirely (treated as "keep everything," not "delete everything," since a
+     misconfigured value silently mass-deleting logs would be a far worse failure mode than doing
+     nothing). Called once at process startup in both `main.py` (CLI) and `src/gui/worker.py` (GUI) —
+     found and fixed the GUI path in the same pass this time, rather than as a separate follow-up entry
+     like the earlier `TESSERACT_CMD`/`AUTO_APPROVE_EXTERNAL` gaps, learning from that earlier miss.
+  5. **`config.py`**: new `log_retention_days: int = 14` (env `LOG_RETENTION_DAYS`) — no toggle added for
+     disabling encryption itself, since there's no legitimate reason a user would want to turn off a
+     transparent, free protection; the only real control here is over retention duration.
+  6. **`src/doctor.py`**: new `check_encryption_at_rest()` — reports whether DPAPI is actually available
+     (and thus whether memory will be encrypted or fall back to plaintext) without blocking anything,
+     since the agent works correctly either way. Its closing summary line was also corrected: it
+     previously said optional warnings "only limit desktop-target-type steps," which stopped being
+     accurate once an optional check (this one) existed for a completely different reason.
+  7. **`requirements.txt`**: documents `pywin32` as the real Windows-only dependency needed for actual
+     encryption (commented out, not pinned, since it can't be installed or verified in this Linux
+     build/test environment — matches the existing `pyautogui` precedent in the same file).
+- **Why:** Direct implementation of the design decision recorded immediately above, per `docs/PHASES.md`'s
+  Phase 8 file table and success criterion.
+- **Impacts:** 291 → 310 tests passing (+19: 7 `test_at_rest.py` covering the plaintext-fallback path,
+  the one-time warning, and a full round-trip against a reversible fake `win32crypt`; 4
+  `test_episodic_store.py` and 2 `test_semantic_store.py` proving the RAW SQLITE BYTES on disk don't
+  contain the plaintext value when DPAPI is available — not just that `at_rest.py` round-trips correctly
+  in isolation — plus proving the store's normal API still works transparently; 5
+  `test_logger.py` covering deletion of old files, retention of recent ones, the narrow extension
+  allowlist, the disable-via-non-positive-value behavior, and a missing-directory edge case; 2
+  `test_config.py` for the new field; 1 `test_doctor.py` for the new check). `docs/PHASES.md`'s Phase 8
+  marked complete — its success criterion (a documented design decision for key management and retention,
+  recorded before implementation) was met by the immediately preceding entry, and is now backed by working,
+  tested code. Not yet verified: none of this has been exercised against a real Windows machine with
+  `pywin32` actually installed — every test here uses a reversible fake standing in for real DPAPI, since
+  real DPAPI cannot be installed or called in this Linux build environment. The user should confirm on
+  their own Windows machine (after `pip install pywin32`) that `python -m src.doctor` reports encryption
+  as available, and that existing episodic/semantic memory continues to work after upgrading.

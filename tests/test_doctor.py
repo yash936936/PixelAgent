@@ -4,6 +4,7 @@ from src.doctor import (
     CheckResult,
     check_config,
     check_desktop_control,
+    check_encryption_at_rest,
     check_playwright_chromium,
     check_semantic_layer,
     check_tesseract,
@@ -107,6 +108,16 @@ def test_check_semantic_layer_passes():
     assert "SemanticRiskJudge" in result.detail
 
 
+def test_check_encryption_at_rest_reports_unavailable_in_this_environment():
+    """This build/test environment is Linux -- pywin32 genuinely isn't
+    installed, so this should report unavailable (optional, never
+    blocking) without any mocking at all."""
+    result = check_encryption_at_rest()
+    assert result.optional is True
+    assert result.passed is False
+    assert "pywin32" in result.detail
+
+
 def test_run_diagnostics_returns_a_result_for_every_check(monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
@@ -118,6 +129,7 @@ def test_run_diagnostics_returns_a_result_for_every_check(monkeypatch, tmp_path)
     assert "Playwright Chromium" in names
     assert "Desktop control (pyautogui + real display)" in names
     assert "Semantic risk layer (Phase 6)" in names
+    assert "Encryption-at-rest (Windows DPAPI)" in names
     # --live not passed -- no real network call should have been attempted.
     assert "Gemini API (live call)" not in names
 

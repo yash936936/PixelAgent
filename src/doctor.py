@@ -195,6 +195,26 @@ def check_semantic_layer() -> CheckResult:
         return CheckResult("Semantic risk layer (Phase 6)", False, f"{type(exc).__name__}: {exc}")
 
 
+def check_encryption_at_rest() -> CheckResult:
+    """Phase 8 (2026-08-02, docs/DECISIONS.md): reports whether episodic/
+    semantic memory will actually be encrypted at rest via Windows DPAPI,
+    or fall back to plaintext. Always optional -- the agent works either
+    way, this just reports which mode is active so the user knows."""
+    from src.security import at_rest
+
+    if at_rest.is_available():
+        return CheckResult(
+            "Encryption-at-rest (Windows DPAPI)", True,
+            "available -- episodic/semantic memory will be encrypted", optional=True,
+        )
+    return CheckResult(
+        "Encryption-at-rest (Windows DPAPI)", False,
+        "unavailable (pywin32 not installed, or not on Windows) -- memory will be stored "
+        "UNENCRYPTED. Run `pip install pywin32` on your real Windows machine to enable it.",
+        optional=True,
+    )
+
+
 def run_diagnostics(live: bool = False) -> list[CheckResult]:
     results: list[CheckResult] = []
 
@@ -213,6 +233,7 @@ def run_diagnostics(live: bool = False) -> list[CheckResult]:
         results.append(check_writable_dirs(cfg))
 
     results.append(check_semantic_layer())
+    results.append(check_encryption_at_rest())
 
     return results
 
@@ -235,7 +256,7 @@ def _print_report(results: list[CheckResult]) -> int:
     if blocking_failures:
         print(f"{blocking_failures} blocking check(s) failed. Fix these before attempting a live task.")
         return 1
-    print("All required checks passed. Optional warnings above (if any) only limit desktop-target-type steps.")
+    print("All required checks passed. Any optional warnings above are non-blocking — see each one's own detail for what it affects.")
     return 0
 
 

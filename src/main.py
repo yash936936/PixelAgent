@@ -18,7 +18,7 @@ from src.brain.risk_model_backend import HostedRiskJudge, LocalFineTunedRiskMode
 from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.memory.memory_api import MemoryAPI
-from src.observability.logger import Logger
+from src.observability.logger import Logger, prune_old_logs
 from src.perception.ocr import OCREngine
 
 
@@ -100,11 +100,24 @@ def _build_planner(cfg):
             )
         generate_fn = build_http_generate_fn(cfg.local_planner_endpoint)
         return LocalFineTunedPlanner(generate_fn=generate_fn)
-    return HostedLLMPlanner(api_key=cfg.gemini_api_key, model=cfg.llm_model)
+    return HostedLLMPlanner(
+        api_key=cfg.gemini_api_key,
+        model=cfg.llm_model,
+        rate_limit_max_attempts=cfg.rate_limit_max_attempts,
+        rate_limit_max_backoff_seconds=cfg.rate_limit_max_backoff_seconds,
+    )
 
 
 def main(instruction: str) -> dict:
     cfg = config.load()
+
+    # Phase 8 (2026-08-02, docs/DECISIONS.md): day-based retention for
+    # trace logs/screenshots, run once at startup before this task's own
+    # log file is created (so the brand-new file is never a pruning
+    # candidate).
+    deleted = prune_old_logs(cfg.log_dir, cfg.log_retention_days)
+    if deleted:
+        print(f"[info] Pruned {deleted} log/screenshot file(s) older than {cfg.log_retention_days} day(s).")
 
     logger = Logger(cfg.log_dir)
     planner = _build_planner(cfg)

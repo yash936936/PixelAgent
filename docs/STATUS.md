@@ -6,45 +6,23 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 5 — Hardening, complete. Plus: native Windows GUI (PySide6) added 2026-07-12, ahead of GPU model
-training per the user's stated plan (build the GUI now, train once real usage data exists). Plus
-(2026-08-01): a zero-dependency semantic risk/boundary layer and an offline real-pixel integration harness
-(`tests/integration/`) — the latter immediately found and fixed a genuine OCR bug (see below). Plus
-(2026-08-01, Phase 6 of `docs/PHASES.md`): the semantic layer is now actually live-wired into the
-orchestrator (`RISK_MODEL_BACKEND=semantic` in `config.py`, `_check_boundary()`'s always-on second layer)
-— previously it only ran inside the eval harness. Plus (2026-08-01): Phase 7 prep (`src/doctor.py`
-pre-flight tool, `TESSERACT_CMD` config wiring) followed by the actual first live runs on the user's real
-Windows machine — two real bugs found and fixed (a transient truncated-JSON planner crash, now retried
-once before raising; a planner/action_router schema mismatch on desktop clicks, now fixed in both the
-prompt and with a defensive fallback). The browser path is now confirmed working end-to-end on real
-hardware. The desktop path then completed fully on re-run, surfacing two more real bugs, one
-safety-relevant: the CLI confirmation gate silently approved a typo/unrecognized input instead of
-re-prompting (now fixed — loops until a real approve/deny/edit answer is given, never defaults to
-approval), and `mouse_keyboard.py`'s `type_text()` had no verification the intended window actually had
-focus, which let a test message get typed into the terminal instead of Notepad (now fixed with a real
-active-window poll before typing). On the user's very next re-run, the SAME symptom recurred — root-caused
-to episodic replay silently bypassing the planner (and thus the fix just made) by reusing a pre-fix
-episode's stored steps verbatim; fixed with a `STEP_SCHEMA_VERSION` gate that permanently excludes
-old-schema episodes from replay. Also added, per the user's own diagnosis and explicit request: active
-window re-activation (not just detection) when the expected window loses focus, and an opt-in
-`AUTO_APPROVE_EXTERNAL` flag that skips the External-risk prompt entirely (never applies to Destructive).
-On the very next attempt after that, a NEW failure appeared: the desktop-only task crashed on a Chrome
-launch failure despite never using a browser, because Chrome launched unconditionally for every task and
-`_observe()` queried the driver on every step regardless of task type. Fixed by making Chrome launch lazily
-(only on first real browser use) and having `_observe()` cooperate by checking `is_launched` first — a
-desktop-only task now never touches Playwright/Chrome at all. Also found and fixed, while verifying the
-GUI's separate entry point: `src/gui/worker.py` had never received the `TESSERACT_CMD` or
-`AUTO_APPROVE_EXTERNAL` wiring added earlier in this session.
-Non-GUI suite: 195 →
-277 tests passing (+82 total across all of today's work) — verified with
+**Phase: 8 — Data security & retention, COMPLETE (2026-08-02).** Phases 1–5 (core loop through hardening)
+complete; native Windows GUI (PySide6) added 2026-07-12; Phase 6 (semantic risk/boundary layer live-wired
+into the orchestrator) complete 2026-08-01; Phase 7 (first real live validation on Windows) complete
+2026-08-02 — both browser and desktop execution paths completed a task end-to-end with zero errors, after
+nine distinct real bugs were found from actual traces and fixed (full details in `docs/DECISIONS.md`'s
+2026-08-01/2026-08-02 entries). Phase 8 recorded its design decision first, per the phase's own success
+criterion: episodic/semantic memory is now encrypted at rest via Windows DPAPI (tied to the current OS user
+account, no separate key file to manage), and trace logs/screenshots in `logs/` are pruned once older than
+`LOG_RETENTION_DAYS` (default 14) at process startup. Full reasoning (threat model, rejected alternatives)
+in `docs/DECISIONS.md`'s 2026-08-02 Phase 8 entries. Non-GUI suite: 195 → 310 tests passing, verified with
 `python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the 232-test
-full-suite figure from 2026-07-13 (which includes the 38 GUI tests) was not re-verified in this same
-environment and should be re-confirmed on a machine with PySide6 installed before being combined with the
-above. Still not yet run live against a real screen/OS/mouse-keyboard/LLM/display on the user's actual
-Windows machine (same blocker throughout this project, and the next scheduled item — `docs/PHASES.md`
-Phase 7) — but as of 2026-08-01, real Tesseract OCR and real `screen_diff` have now been exercised against
-real rendered pixels via headless Chromium, which is a meaningfully closer proxy than the fully-synthetic
-data every earlier test used, even though it is not yet the full live system.**
+full-suite figure from 2026-07-13 (which includes 38 GUI tests) was not re-verified in this same
+environment. **Still open:** real Windows DPI/multi-monitor scaling has not been exercised by any run so
+far; the `src/gui/worker.py` port of Phase 7's CLI-path fixes is unverified in any environment; Phase 8's
+encryption has only been tested against a reversible fake standing in for real DPAPI (`pywin32` cannot be
+installed in this Linux build environment) — not yet confirmed working against real DPAPI on the user's own
+Windows machine. Next up: Phase 9 (injection-aware risk signal).**
 
 ## Documentation files (`docs/` + root)
 
@@ -68,8 +46,8 @@ data every earlier test used, even though it is not yet the full live system.**
 | File | Phase | Status |
 |---|---|---|
 | `src/main.py` | 1.1 (updated Phase 6, 2026-08-01) | Complete (`_build_risk_model_judge` adds `"semantic"` branch — no endpoint needed) |
-| `src/config.py` | 1.1 (updated Phase 6, 2026-08-01) | Complete (`risk_model_backend` accepts `"semantic"`) |
-| `src/doctor.py` | Phase 7 prep (2026-08-01) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer without executing a real task. Not a substitute for Phase 7 itself. |
+| `src/config.py` | 1.1 (updated Phase 6, 2026-08-01, Phase 8, 2026-08-02) | Complete (`risk_model_backend` accepts `"semantic"`; `log_retention_days` added) |
+| `src/doctor.py` | Phase 7 prep (2026-08-01), updated Phase 8 (2026-08-02) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer/encryption-at-rest without executing a real task. Not a substitute for Phase 7 itself. |
 | `requirements.txt` | 1.1 | Complete |
 | \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4, Phase 6) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning + Phase 6 always-on semantic boundary layer wired in) |
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
@@ -77,16 +55,17 @@ data every earlier test used, even though it is not yet the full live system.**
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
 | `src/action/playwright_driver.py` | 1.3 (updated 2026-08-01) | Complete (fixed real profile-launch bug found via live GUI run, 2026-07-13; made Chrome launch lazy — `is_launched` property — after a desktop-only live task was needlessly blocked by a Chrome launch failure) |
 | \`src/action/action_router.py\` | 1.3 (updated 2.2) | Complete (desktop branch added) |
-| \`src/action/mouse_keyboard.py\` | 2.2 (updated 2026-08-01) | Complete (real focus-verification + active-reactivation before typing, found/fixed via Phase 7 live run) |
+| \`src/action/mouse_keyboard.py\` | 2.2 (updated 2026-08-01, 2026-08-02) | Complete (real focus-verification + periodic active-reactivation before typing + post-action settle delay on type/hotkey, all found/fixed via Phase 7 live runs) |
 | `src/confirmation/gate.py` | 1.4 (updated 2026-08-01) | Complete (fixed CLI unrecognized-input-silently-approves bug; added opt-in `auto_approve_external`, never applies to Destructive) |
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
-| `src/observability/logger.py` | 1.5 (updated Phase 4) | Complete (LoopAudit + log_event, llm_call accuracy) |
+| `src/observability/logger.py` | 1.5 (updated Phase 4, updated Phase 8, 2026-08-02) | Complete (LoopAudit + log_event, llm_call accuracy; `prune_old_logs()` day-based retention for trace logs/screenshots) |
 | `src/observability/trace_replay.py` | 5 | Complete |
 | \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
-| `src/memory/episodic_store.py` | 3.1 (updated Phase 4, updated 2026-08-01) | Complete (edited flag + flagged_for_review + `STEP_SCHEMA_VERSION` replay gate, closing a real bug where stale pre-fix episodes were silently replayed) |
-| `src/memory/semantic_store.py` | 3.2 | Complete |
+| `src/memory/episodic_store.py` | 3.1 (updated Phase 4, updated 2026-08-01, updated Phase 8 2026-08-02) | Complete (edited flag + flagged_for_review + `STEP_SCHEMA_VERSION` replay gate + Windows-DPAPI encryption-at-rest via `src/security/at_rest.py`) |
+| `src/memory/semantic_store.py` | 3.2 (updated Phase 8, 2026-08-02) | Complete (Windows-DPAPI encryption-at-rest via `src/security/at_rest.py`) |
+| `src/security/at_rest.py` | Phase 8 (2026-08-02) | Complete — Windows DPAPI wrapper (`protect`/`unprotect`/`is_available`), degrades to plaintext with a one-time warning on non-Windows. Only tested against a reversible fake `win32crypt`, not real DPAPI. |
 | `src/memory/memory_api.py` | 3.2 (updated Phase 4) | Complete |
 | `src/brain/research_router.py` | 4.1 | Complete |
 | `src/brain/semantic_matcher.py` | Improvement pass (2026-08-01) | Complete (dependency-free char-n-gram cosine similarity, backs `SemanticRiskJudge`/`semantic_boundary_match`) |
@@ -101,7 +80,7 @@ data every earlier test used, even though it is not yet the full live system.**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (non-GUI: 277 passing — 195 Phases 1-5/GUI-facade/playwright + 18 semantic-layer + 6 real-pixel integration + 2 OCR regression + 8 Phase-6 wiring + 11 doctor tool + 4 TESSERACT_CMD wiring + 5 Phase-7 live-bug fixes (planner retry + schema fallback) + 9 Phase-7 live-bug fixes (gate safety + window-focus verification) + 12 Phase-7 live-bug fixes (episodic replay gate + window re-activation + auto-approve) + 7 Phase-7 live-bug fixes (lazy Chrome launch); see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/` | ongoing | In progress (non-GUI: 310 passing — 195 Phases 1-5/GUI-facade/playwright + 18 Phase-6 semantic-layer/wiring + 6 real-pixel integration + 2 OCR regression + 70 Phase-7 live-bug-fix tests (see `docs/DECISIONS.md`'s 2026-08-01/02 entries for the 9 bugs these cover) + 19 Phase-8 encryption-at-rest/retention tests; see note above re: 38 GUI-only tests not re-verified this session) |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -346,3 +325,85 @@ the same problem, found two unrelated real gaps: `src/gui/worker.py` never recei
 tests passing. Full details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching entries. Not yet done:
 re-running the desktop task to confirm it no longer depends on Chrome; the `worker.py` port is unverified in
 any environment (GUI tests require PySide6).
+
+---
+**Update 2026-08-01 (Gemini 429 rate-limit crash fixed):** The user's next run hit a fresh unhandled crash —
+`google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED` (their free-tier key allows only 5 requests/
+minute). This exception type is unrelated to the parse-failure `ValueError` the existing retry catches, so
+it was never handled. Added `_generate_with_rate_limit_retry()`: catches API errors specifically where
+`code == 429`, reads the server's own suggested `retryDelay` from the error body, backs off and retries up
+to 3 attempts, and raises immediately (no retry) for any other API error. Non-GUI suite: 277 → 281 tests
+passing. Full details in `docs/DECISIONS.md`/`docs/DEBUG.md`'s matching entries. Does not raise the
+underlying quota ceiling itself — a user hitting this often should slow down between tasks or move off the
+free tier; the fix only prevents a single transient hit from crashing an otherwise-recoverable task.
+
+---
+**Update 2026-08-01 (rate-limit retry made configurable — previous default compounded into 10+ minutes):**
+The user reported a task taking 10+ minutes to reach its first prompt — a direct consequence of the
+previous update's fixed 3-attempt/uncapped backoff compounding across several rate-limited steps on a
+heavily-throttled free-tier key. Rather than revert (which would reintroduce the earlier crash), made both
+the attempt count and backoff cap configurable via `RATE_LIMIT_MAX_ATTEMPTS`/
+`RATE_LIMIT_MAX_BACKOFF_SECONDS`, with a faster-failing default (2 attempts, capped at 20s, down from 3
+uncapped) wired through both `main.py` and `src/gui/worker.py`. Setting `RATE_LIMIT_MAX_ATTEMPTS=1`
+disables the retry entirely for a fail-fast experience. Non-GUI suite: 281 → 287 tests passing. Full
+details in `docs/DECISIONS.md`'s matching entry. Not yet done: the user has not yet re-run the desktop task
+to confirm the new defaults meaningfully shorten the wait in practice.
+
+---
+**Update 2026-08-02 (three trace logs reviewed together — Start-menu clicking made reliable via hotkey;
+window re-activation made periodic):** The user shared three separate desktop-task traces. Confirmed first
+that the 2026-08-01 `expect_window_contains` fix was working correctly (trace 3 properly caught VS Code
+having focus instead of Notepad and refused to type) rather than assuming the error meant it was broken.
+Found two real issues instead: (1) every trace needed a mid-task replan just to click the Start button —
+`action_router.py` already had a working `hotkey` action, but `SYSTEM_PROMPT` never told the planner it
+existed, so it always tried an unreliable OCR click on the small taskbar icon first. Fixed by documenting
+`hotkey` and recommending `{"keys": ["win"]}` specifically for the Start menu. (2) The window-activation
+fix only tried once, too early for a cold-launching app like Notepad to have created its window yet — fixed
+with periodic retries across a longer (10s, up from 5s) timeout window. Non-GUI suite: 287 → 289 tests
+passing. Full details in `docs/DECISIONS.md`'s matching entry. Not yet done: re-running the desktop task to
+confirm the Start-menu step no longer needs a replan and Notepad reliably gains focus.
+
+---
+**Update 2026-08-02 (hotkey fix confirmed working; a new type-then-hotkey race found and fixed):** The
+user's re-run confirmed the hotkey fix worked perfectly for opening the Start menu — no replan needed. A
+new race then appeared one step later: `type("notepad")` immediately followed by `hotkey(["enter"])` fired
+before Windows' search-results panel finished populating, so Enter did nothing; the resulting replan
+correction (a click) then also failed since the Start menu state had shifted by then, and the task
+eventually exhausted its replan budget. Root cause: `click_at()` already settles 0.3s after acting, but
+`type_text()`/`press_hotkey()` had no equivalent delay. Fixed by adding the same settle pattern
+(`_POST_TYPE_OR_HOTKEY_SETTLE_SECONDS = 0.4`) to both. Non-GUI suite: 289 → 291 tests passing. Full details
+in `docs/DECISIONS.md`'s matching entry. Fourth instance today of this same bug family (instant action
+racing a variable-latency Windows UI transition) — worth treating a settle delay as the default for any
+future `mouse_keyboard.py` action rather than waiting to find each one live individually. Not yet done:
+re-running the desktop task to confirm this specific race no longer occurs in practice.
+
+---
+**Update 2026-08-02 (Phase 7 COMPLETE):** The user re-ran the desktop task immediately after the settle-
+delay fix above. Result: `status: done`, all 4 steps `executed`, **zero replans, zero errors** — the first
+fully clean desktop-path run in this project's history. Replayed from a stable stored episode at $0.00
+cost, itself a good sign the fixed step sequence is now trustworthy for reuse. This satisfies
+`docs/PHASES.md`'s Phase 7 success criterion in full: one full task completing end-to-end on real Windows
+hardware via each execution path (browser confirmed earlier, desktop confirmed now), with a real trace log
+to inspect. **`docs/PHASES.md`'s Phase 7 is now marked COMPLETE.** Nine distinct real bugs were found and
+fixed across this phase's live-run cycle — see `docs/DECISIONS.md`'s 2026-08-01/2026-08-02 entries for the
+full list. Remaining open, unchanged by Phase 7: real Windows DPI/multi-monitor scaling has not been
+exercised by any run so far, and the `src/gui/worker.py` port of Phase 7's CLI-path fixes remains
+unverified in any environment. Next scheduled: Phase 8 (data security & retention).
+
+---
+**Update 2026-08-02 (Phase 8 COMPLETE — encryption-at-rest + log/screenshot retention):** Design decision
+recorded first, per this phase's own requirement: Windows DPAPI over a user-managed passphrase or separate
+key file (ties encryption to the current Windows user account, zero key management; full reasoning and
+rejected alternatives in `docs/DECISIONS.md`). Implemented: `src/security/at_rest.py` (DPAPI wrapper,
+degrades to plaintext with a one-time warning on non-Windows), `episodic_store.py`/`semantic_store.py`
+(sensitive columns encrypted transparently, matching logic unaffected), `logger.py`'s new
+`prune_old_logs()` (day-based retention, default 14 days, wired into both `main.py` and
+`src/gui/worker.py` together this time), a new `config.py` field (`LOG_RETENTION_DAYS`), and a new
+`src/doctor.py` encryption-availability check. Non-GUI suite: 291 → 310 tests passing, including tests
+proving the raw SQLite bytes on disk don't contain plaintext when DPAPI is available, not just that the
+wrapper round-trips in isolation. **`docs/PHASES.md`'s Phase 8 is now marked COMPLETE.** Not yet verified:
+none of this has been exercised against real DPAPI — `pywin32` cannot be installed in this Linux build
+environment, so every test uses a reversible fake standing in for `win32crypt`. The user should confirm on
+their own Windows machine (after `pip install pywin32`) that `python -m src.doctor` reports encryption as
+available, and that existing episodic/semantic memory continues to work correctly afterward. Next
+scheduled: Phase 9 (injection-aware risk signal).

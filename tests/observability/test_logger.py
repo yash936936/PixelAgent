@@ -1,8 +1,10 @@
 import json
+import os
+import time
 
 from src.brain.risk_classifier import Risk
 from src.confirmation.gate import GateDecision
-from src.observability.logger import Logger, _redact_step
+from src.observability.logger import Logger, _redact_step, prune_old_logs
 
 
 def _read_lines(logger):
@@ -75,3 +77,58 @@ def test_log_event_redacts_embedded_step(tmp_path):
 
     raw = logger.log_path.read_text(encoding="utf-8")
     assert "abc123" not in raw
+
+
+def _make_file(path, age_days: float):
+    path.write_text("content")
+    old_time = time.time() - (age_days * 86400)
+    os.utime(path, (old_time, old_time))
+
+
+def test_prune_old_logs_deletes_files_older_than_retention(tmp_path):
+    old_log = tmp_path / "task_old.jsonl"
+    old_screenshot = tmp_path / "_gate_context_old.png"
+    _make_file(old_log, age_days=20)
+    _make_file(old_screenshot, age_days=20)
+
+    deleted = prune_old_logs(tmp_path, retention_days=14)
+
+    assert deleted == 2
+    assert not old_log.exists()
+    assert not old_screenshot.exists()
+
+
+def test_prune_old_logs_keeps_recent_files(tmp_path):
+    recent_log = tmp_path / "task_recent.jsonl"
+    _make_file(recent_log, age_days=1)
+
+    deleted = prune_old_logs(tmp_path, retention_days=14)
+
+    assert deleted == 0
+    assert recent_log.exists()
+
+
+def test_prune_old_logs_ignores_non_prunable_extensions(tmp_path):
+    """Deliberately narrow -- must never touch e.g. the SQLite memory
+    databases that might live alongside logs, or any other file type."""
+    old_db = tmp_path / "episodic_memory.db"
+    _make_file(old_db, age_days=100)
+
+    deleted = prune_old_logs(tmp_path, retention_days=14)
+
+    assert deleted == 0
+    assert old_db.exists()
+
+
+def test_prune_old_logs_disabled_when_retention_days_not_positive(tmp_path):
+    old_log = tmp_path / "task_old.jsonl"
+    _make_file(old_log, age_days=100)
+
+    assert prune_old_logs(tmp_path, retention_days=0) == 0
+    assert prune_old_logs(tmp_path, retention_days=-5) == 0
+    assert old_log.exists()
+
+
+def test_prune_old_logs_handles_nonexistent_dir_gracefully(tmp_path):
+    missing_dir = tmp_path / "does_not_exist"
+    assert prune_old_logs(missing_dir, retention_days=14) == 0

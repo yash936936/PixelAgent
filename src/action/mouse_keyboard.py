@@ -90,9 +90,21 @@ def _default_controller() -> OSController:
 class MouseKeyboard:
     #: How long to wait, polling, for an expected window to gain focus
     #: before giving up and raising -- see type_text()'s
-    #: expect_window_contains parameter.
-    DEFAULT_FOCUS_TIMEOUT_SECONDS = 5.0
+    #: expect_window_contains parameter. Raised from 5.0 (2026-08-01,
+    #: docs/DECISIONS.md): a live run showed a single activation attempt
+    #: made too early (before a cold-launched app like Notepad had even
+    #: created its window yet) failing, then running out the clock before
+    #: the window ever appeared. More time, plus retrying activation
+    #: periodically instead of once, gives a slow-launching app a real
+    #: chance to be found.
+    DEFAULT_FOCUS_TIMEOUT_SECONDS = 10.0
     _FOCUS_POLL_INTERVAL_SECONDS = 0.2
+    #: Minimum gap between repeated activate_window() attempts -- spamming
+    #: it every single 0.2s poll would be wasteful and could itself cause
+    #: focus-stealing flicker; retrying every couple of seconds gives a
+    #: newly-launching app a real chance to have created its window since
+    #: the last attempt.
+    _ACTIVATION_RETRY_INTERVAL_SECONDS = 2.0
 
     #: Brief pause after a click, before anything else happens -- gives a
     #: newly-launched app a moment to at least start appearing before the
@@ -101,6 +113,17 @@ class MouseKeyboard:
     #: cheap, harmless floor underneath it, since some UI transitions have
     #: no distinct "window title" to poll for (e.g. a menu opening).
     _POST_CLICK_SETTLE_SECONDS = 0.3
+
+    #: Brief pause after typing or a hotkey, before anything else happens --
+    #: found live on 2026-08-02 (docs/DECISIONS.md): a "type 'notepad'" step
+    #: immediately followed by a "press Enter" hotkey raced ahead of Windows'
+    #: search-results UI actually populating/highlighting the top match, so
+    #: Enter did nothing -- screen_diff correctly detected no visible change
+    #: and triggered a replan, but by the time the corrected click step ran,
+    #: the Start menu state had already shifted, and it failed too. Mirrors
+    #: _POST_CLICK_SETTLE_SECONDS's existing rationale: not a substitute for
+    #: real verification, just a cheap, harmless floor underneath it.
+    _POST_TYPE_OR_HOTKEY_SETTLE_SECONDS = 0.4
 
     def __init__(self, controller: OSController | None = None) -> None:
         self._controller = controller or _default_controller()
@@ -136,20 +159,27 @@ class MouseKeyboard:
         if expect_window_contains:
             deadline = time.monotonic() + timeout
             last_seen_title: str | None = None
-            attempted_activation = False
+            last_activation_attempt: float | None = None
             while time.monotonic() < deadline:
                 last_seen_title = self._controller.get_active_window_title()
                 if last_seen_title and expect_window_contains.lower() in last_seen_title.lower():
                     break
-                if not attempted_activation:
+                now = time.monotonic()
+                if (
+                    last_activation_attempt is None
+                    or now - last_activation_attempt >= self._ACTIVATION_RETRY_INTERVAL_SECONDS
+                ):
                     # Real fix (docs/DECISIONS.md 2026-08-01) for "the target
                     # app goes to the background and the next action fails":
-                    # actively try to reclaim focus once, instead of only
-                    # ever passively waiting and hoping it regains focus on
-                    # its own (e.g. after the confirmation-gate prompt
-                    # itself stole focus to the terminal).
+                    # actively try to reclaim focus, instead of only ever
+                    # passively waiting and hoping it regains focus on its
+                    # own (e.g. after the confirmation-gate prompt itself
+                    # stole focus to the terminal). Retried periodically
+                    # (not just once) since a single early attempt can miss
+                    # a cold-launching app that hasn't created its window
+                    # yet -- found live on 2026-08-02.
                     self._controller.activate_window(expect_window_contains)
-                    attempted_activation = True
+                    last_activation_attempt = now
                 time.sleep(self._FOCUS_POLL_INTERVAL_SECONDS)
             else:
                 raise RuntimeError(
@@ -161,9 +191,11 @@ class MouseKeyboard:
                 )
 
         self._controller.typewrite(text, interval=0.02)
+        time.sleep(self._POST_TYPE_OR_HOTKEY_SETTLE_SECONDS)
 
     def press_hotkey(self, *keys: str) -> None:
         self._controller.hotkey(*keys)
+        time.sleep(self._POST_TYPE_OR_HOTKEY_SETTLE_SECONDS)
 
     def screenshot(self, path: str | None = None):
         image = self._controller.screenshot()

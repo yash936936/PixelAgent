@@ -2,6 +2,13 @@
 Semantic memory: durable key-value facts that persist across tasks - user
 preferences (e.g. default Chrome profile) and learned UI quirks per
 site/app. See docs/PHASES.md Part 3.2.
+
+Encryption-at-rest (2026-08-02, Phase 8): `value_json` is encrypted via
+Windows DPAPI (src/security/at_rest.py) before being written, and
+decrypted transparently on every read. See docs/DECISIONS.md's 2026-08-02
+Phase 8 entry for the full design decision (threat model, why DPAPI over a
+user-managed passphrase). Degrades to plaintext with a one-time warning on
+non-Windows systems, where DPAPI is unavailable.
 """
 from __future__ import annotations
 
@@ -10,6 +17,8 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+from src.security import at_rest
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
@@ -43,7 +52,7 @@ class SemanticStore:
             "INSERT INTO facts (namespace, key, value_json, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(namespace, key) DO UPDATE SET value_json = excluded.value_json, "
             "updated_at = excluded.updated_at",
-            (namespace, key, json.dumps(value), time.time()),
+            (namespace, key, at_rest.protect(json.dumps(value)), time.time()),
         )
         self._conn.commit()
 
@@ -53,13 +62,13 @@ class SemanticStore:
         ).fetchone()
         if row is None:
             return default
-        return json.loads(row[0])
+        return json.loads(at_rest.unprotect(row[0]))
 
     def all_facts(self, namespace: str) -> dict[str, Any]:
         rows = self._conn.execute(
             "SELECT key, value_json FROM facts WHERE namespace = ?", (namespace,)
         ).fetchall()
-        return {key: json.loads(value_json) for key, value_json in rows}
+        return {key: json.loads(at_rest.unprotect(value_json)) for key, value_json in rows}
 
     def all_preferences(self) -> dict[str, Any]:
         """Public read-all for the reserved preferences namespace — added

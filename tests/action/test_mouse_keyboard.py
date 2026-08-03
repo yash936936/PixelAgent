@@ -38,6 +38,27 @@ def test_type_text():
     controller.typewrite.assert_called_once_with("hello", interval=0.02)
 
 
+def test_type_text_settles_after_typing(monkeypatch):
+    """Real fix, docs/DECISIONS.md 2026-08-02: a live run showed 'type
+    notepad' immediately followed by 'press Enter' racing ahead of
+    Windows' search-results UI actually populating -- Enter fired before
+    the top result was highlighted, doing nothing. Mirrors click_at's
+    existing post-action settle."""
+    slept_for = []
+    monkeypatch.setattr("src.action.mouse_keyboard.time.sleep", lambda seconds: slept_for.append(seconds))
+    mk, controller = make_mk()
+    mk.type_text("notepad")
+    assert slept_for == [mk._POST_TYPE_OR_HOTKEY_SETTLE_SECONDS]
+
+
+def test_press_hotkey_settles_after_pressing(monkeypatch):
+    slept_for = []
+    monkeypatch.setattr("src.action.mouse_keyboard.time.sleep", lambda seconds: slept_for.append(seconds))
+    mk, controller = make_mk()
+    mk.press_hotkey("enter")
+    assert slept_for == [mk._POST_TYPE_OR_HOTKEY_SETTLE_SECONDS]
+
+
 def test_type_text_with_no_expected_window_types_immediately_unverified():
     """Backward-compatible default: omitting expect_window_contains skips
     verification entirely, same as the old behavior."""
@@ -83,7 +104,7 @@ def test_type_text_attempts_to_activate_expected_window_on_mismatch():
     """Real fix, docs/DECISIONS.md 2026-08-01: 'the target app goes to the
     background and the next action fails' -- rather than only passively
     waiting, type_text must actively try to reclaim focus for the expected
-    window once before giving up."""
+    window before giving up."""
     mk, controller = make_mk()
     controller.get_active_window_title.side_effect = ["Command Prompt", "Untitled - Notepad"]
     mk.type_text("hello", expect_window_contains="Notepad")
@@ -91,12 +112,40 @@ def test_type_text_attempts_to_activate_expected_window_on_mismatch():
     controller.typewrite.assert_called_once_with("hello", interval=0.02)
 
 
-def test_type_text_only_attempts_activation_once_not_every_poll():
+def test_type_text_does_not_retry_activation_faster_than_the_retry_interval():
+    """Within a short timeout (well under _ACTIVATION_RETRY_INTERVAL_SECONDS),
+    activation should only be attempted once -- spamming it on every 0.2s
+    poll would be wasteful and could itself cause focus-stealing flicker."""
     mk, controller = make_mk()
     controller.get_active_window_title.return_value = "Command Prompt"  # never matches
     with pytest.raises(RuntimeError):
         mk.type_text("hello", expect_window_contains="Notepad", timeout=0.05)
     controller.activate_window.assert_called_once_with("Notepad")
+
+
+def test_type_text_retries_activation_periodically_for_a_slow_launching_app():
+    """Real fix, docs/DECISIONS.md 2026-08-02: a live run showed a single,
+    early activation attempt fail because a cold-launching app (Notepad)
+    hadn't created its window yet -- the fix must retry activation more
+    than once for a genuinely slow-to-appear window, not give up after one
+    early miss."""
+    mk, controller = make_mk()
+    controller.get_active_window_title.return_value = "Command Prompt"  # never matches
+    # Fake the passage of real time across multiple retry-interval windows
+    # without an actual multi-second test: monotonic() advances by a large
+    # fixed step each call, well past _ACTIVATION_RETRY_INTERVAL_SECONDS.
+    fake_clock = {"t": 0.0}
+
+    def fake_monotonic():
+        fake_clock["t"] += 1.0
+        return fake_clock["t"]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.action.mouse_keyboard.time.monotonic", fake_monotonic)
+        with pytest.raises(RuntimeError):
+            mk.type_text("hello", expect_window_contains="Notepad", timeout=10.0)
+
+    assert controller.activate_window.call_count >= 2
 
 
 def test_type_text_no_activation_attempt_when_already_focused():

@@ -487,3 +487,82 @@ Append to the bottom of this file after each pass:
   (`main.py` CLI, `src/gui/worker.py` GUI) sharing core logic, and a fix applied to one is not automatically
   present in the other — worth a deliberate spot-check of both whenever a future cross-cutting config-
   wiring change is made, rather than assuming parity.
+
+### [2026-08-01] Debug pass — Gemini 429 rate limit crashed the task; unrelated test-file structure slip
+  caught by running the tests
+- Files checked: `src/brain/planner.py`, plus the user's crash traceback.
+- Issue found: `google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED` — free-tier quota (5 requests/
+  minute) exhausted mid-task, crashing with an unhandled traceback. Confirmed this exception type is
+  distinct from the `ValueError` the existing parse-failure retry catches, so that fix never engaged.
+  Fixed with a dedicated `_generate_with_rate_limit_retry()` — catches API errors specifically where
+  `code == 429`, reads the server's own suggested `retryDelay` from the error body, backs off and retries
+  up to 3 attempts, and re-raises immediately (no retry at all) for any non-429 API error.
+- Also caught, while writing the new tests: an earlier edit today had accidentally swallowed a test
+  function's `def` line during a `str_replace`, leaving the next test's setup code (a `class FakeResponse`
+  block) orphaned inside the previous test rather than starting its own. Running the full test file
+  surfaced this immediately as a structural break; fixed by restoring the missing `def
+  test_hosted_planner_generate_fn_reusable_for_risk_judge(monkeypatch):` line. Worth noting as a reminder
+  to always run the affected file's full test suite after any edit, not just the newly added tests in
+  isolation — this slip wouldn't have been visible from the new tests passing alone.
+- Issues NOT fixed / still open: the underlying quota limit itself isn't something code can fix — a user
+  on this free tier who hits this often will need to slow down between tasks or move to a paid plan; the
+  retry only rides out a single transient hit, it doesn't raise the ceiling.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 281/281 passed (277 previous + 4 new: rate-limit
+  retry-then-succeed, exhausted-retries-still-raises, non-429-never-retried).
+- Result: **Pass.**
+
+### [2026-08-02] Debug pass — reviewing three trace logs together instead of reacting to one error
+- Files checked: `src/action/action_router.py`, `src/brain/planner.py`'s `SYSTEM_PROMPT`,
+  `src/action/mouse_keyboard.py`, plus three trace logs the user shared from separate live runs.
+- Approach: rather than treating the third trace's error message as a new bug in isolation, first checked
+  whether the `expect_window_contains` fix from the previous day was actually working — it was: the trace
+  clearly shows it correctly detected VS Code had focus (the user was watching the trace log there) instead
+  of Notepad, and refused to type into it. That ruled out the fix itself as broken and reframed the
+  question as "why didn't it recover in time," not "is the check wrong."
+- Issues found, by comparing all three traces side by side rather than just the failing one:
+  1. All three traces needed a mid-task replan on the very first step (clicking Start). Checked
+     `action_router.py` directly rather than assuming the capability didn't exist — it did: `hotkey` was
+     already fully wired to `mouse_keyboard.press_hotkey()`. The actual gap was `SYSTEM_PROMPT` never
+     telling the planner this option existed, so it always attempted the fragile OCR click first. Fixed by
+     documenting `hotkey` and explicitly recommending it for the Start menu specifically.
+  2. Re-examined why the window-activation fix (proven working in issue detection) still failed to recover:
+     a single activation attempt fired once, early, is exactly the kind of check that can miss a window
+     that doesn't exist yet on a cold app launch. Fixed with periodic retries across a longer timeout
+     window instead of a one-shot attempt.
+- Issues NOT fixed / still open: the second trace's distinct `"Could not locate an on-screen element
+  matching 'Start'"` failure (after a replan re-attempted clicking Start when the Start menu had likely
+  already closed) looks like a separate, more transient OCR/UI-timing issue rather than a clear code defect
+  — flagged for the user to watch for on a re-run rather than guessed at blindly.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 289/289 passed (287 previous + 2 net new).
+- Result: **Pass.** Worth keeping as an example of the value of reviewing multiple traces of the same
+  failure together (all three independently showed the same Start-button replan pattern) rather than
+  fixing only what the most recent error message pointed at.
+
+### [2026-08-02] Debug pass — the hotkey fix worked; a new race appeared one step later
+- Files checked: `src/action/mouse_keyboard.py`, `src/brain/orchestrator.py`'s `_execute_and_verify()`,
+  plus the user's latest trace log.
+- Confirmed first: the previous entry's `hotkey`-for-Start-menu fix worked correctly (via replay from a
+  matching prior episode) -- no replan needed for step 1 at all, a clean improvement over every prior
+  trace. This ruled out the hotkey change as the source of the new failure and pointed at what came next
+  instead.
+- Issue found: `type("notepad")` followed immediately by `hotkey(["enter"])` — the pixel-diff verification
+  in `_execute_and_verify()` correctly detected no visible screen change after Enter (the search-results
+  panel likely hadn't finished populating yet), triggering a replan. But the replanner's correction (a
+  click on `target_text: "Notepad"`) then failed too, because by the time it executed, the Start menu state
+  had shifted enough that OCR found nothing. This ping-ponged between "press Enter again" and "click
+  Notepad" until the replan budget was exhausted. Traced the root cause to `mouse_keyboard.py`:
+  `click_at()`/`double_click_at()` already settle for 0.3s after acting (a real fix from earlier in this
+  session), but `type_text()` and `press_hotkey()` had no equivalent settle at all -- so a type-then-hotkey
+  sequence had nothing slowing it down to let Windows' UI catch up.
+- Fixed by adding the same settle-delay pattern to both methods (`_POST_TYPE_OR_HOTKEY_SETTLE_SECONDS =
+  0.4`), rather than tuning the replanner's retry logic, since the actual defect is upstream of
+  verification entirely — the action fired before the UI had a chance to respond, so no amount of replan
+  cleverness downstream would reliably fix it.
+- Issues NOT fixed / still open: the user has not yet re-run the desktop task to confirm the settle delay
+  actually resolves this specific race in practice, rather than just plausibly explaining it.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 291/291 passed (289 previous + 2 new).
+- Result: **Pass.** Fourth time today this exact family of bug (an instant OS-level action racing ahead of
+  a real, variable-latency Windows UI transition) has been found and fixed in a different specific spot —
+  worth noting as a pattern: any new action type added to `mouse_keyboard.py` in the future should default
+  to a settle delay unless there's a specific reason not to, rather than waiting for each one to be found
+  live individually.
