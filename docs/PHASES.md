@@ -270,14 +270,29 @@ after upgrading.
 ---
 
 ## Phase 9 — Injection-aware risk signal
+**Status: COMPLETE (2026-08-02).** `boundary_guard.check_injection_signal()` scores every step's action/
+description/param values against a phrase bank of common prompt-injection framings ("ignore previous
+instructions", "disregard the user", "system:", etc.), independently of and never overriding
+`risk_classifier.py`'s risk tiers or `check()`'s hard boundaries — deliberately never blocks, denies, or
+halts a step by itself, since the success criterion below is about visibility, not gating.
+
 | File | Description |
 |---|---|
-| `src/brain/boundary_guard.py` (updated) | Add a distinct signal for "planned step's rationale traces back to on-screen text that itself reads like an instruction" — separate from ordinary keyword/semantic risk classification, since this is a different threat model (attacker-controlled webpage content, not user phrasing). |
-| `eval/adversarial_cases.jsonl` (updated) | New fifth category, per `eval/README.md`'s own "Adding a fifth category later" note — prompt-injection-sourced instructions, with adversarial examples once real pages exist to mine from (Phase 7). |
+| `src/brain/boundary_guard.py` (updated) | New `check_injection_signal(step) -> InjectionSignal \| None`, kept deliberately separate from `check()` — a distinct signal for "planned step's rationale traces back to on-screen text that itself reads like an instruction," a different threat model (attacker-controlled webpage content) than ordinary risk classification. |
+| `src/brain/orchestrator.py` (updated) | New `_check_injection_signal()`, called on every step in both the normal planning loop and the replay loop, logging a distinct `possible_prompt_injection_signal` trace event without affecting task execution. |
+| `eval/adversarial_cases.jsonl` (updated) | New fifth category (`prompt_injection`, 6 cases, `adv_031`–`adv_036`) — independently written, since no real captured injection attempts exist yet (Phase 7's live runs were all legitimate benign tasks). |
+| `eval/injection_signal_eval.py` (new) | Small dedicated scorer for the new category, kept separate from `adversarial_boundary_eval.py` since it scores a fundamentally different kind of output (a binary signal, not a risk/boundary verdict). 100% accuracy on its own case set. |
 
-**Phase 9 success criterion:** a step whose action originated from injected on-screen text (not the user's
-own task description) is flagged distinctly in the trace log, even when its phrasing alone wouldn't trip
-risk classification.
+**Phase 9 success criterion (MET, 2026-08-02):** a step whose action originated from injected on-screen text
+(not the user's own task description) is flagged distinctly in the trace log, even when its phrasing alone
+wouldn't trip risk classification.
+
+**Not fully solved, and honestly scoped as such:** this is a phrase-bank heuristic, the same class of tool
+as `risk_classifier.py`'s original keyword-only floor — sufficiently novel injection phrasing could still
+slip through undetected (a natural future extension would be a semantic-layer upgrade using the same
+`semantic_matcher.py` machinery Phase 6 used for risk classification). It also only inspects a step's own
+description/params — the planner's own paraphrase of what it read — not the actual raw on-screen page
+content, which would need separate text-extraction-and-diffing plumbing not attempted here.
 
 ---
 

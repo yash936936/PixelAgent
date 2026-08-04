@@ -6,23 +6,25 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 8 — Data security & retention, COMPLETE (2026-08-02).** Phases 1–5 (core loop through hardening)
+**Phase: 9 — Injection-aware risk signal, COMPLETE (2026-08-02).** Phases 1–5 (core loop through hardening)
 complete; native Windows GUI (PySide6) added 2026-07-12; Phase 6 (semantic risk/boundary layer live-wired
 into the orchestrator) complete 2026-08-01; Phase 7 (first real live validation on Windows) complete
 2026-08-02 — both browser and desktop execution paths completed a task end-to-end with zero errors, after
-nine distinct real bugs were found from actual traces and fixed (full details in `docs/DECISIONS.md`'s
-2026-08-01/2026-08-02 entries). Phase 8 recorded its design decision first, per the phase's own success
-criterion: episodic/semantic memory is now encrypted at rest via Windows DPAPI (tied to the current OS user
-account, no separate key file to manage), and trace logs/screenshots in `logs/` are pruned once older than
-`LOG_RETENTION_DAYS` (default 14) at process startup. Full reasoning (threat model, rejected alternatives)
-in `docs/DECISIONS.md`'s 2026-08-02 Phase 8 entries. Non-GUI suite: 195 → 310 tests passing, verified with
-`python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the 232-test
-full-suite figure from 2026-07-13 (which includes 38 GUI tests) was not re-verified in this same
-environment. **Still open:** real Windows DPI/multi-monitor scaling has not been exercised by any run so
-far; the `src/gui/worker.py` port of Phase 7's CLI-path fixes is unverified in any environment; Phase 8's
-encryption has only been tested against a reversible fake standing in for real DPAPI (`pywin32` cannot be
-installed in this Linux build environment) — not yet confirmed working against real DPAPI on the user's own
-Windows machine. Next up: Phase 9 (injection-aware risk signal).**
+nine distinct real bugs were found from actual traces and fixed; Phase 8 (encryption-at-rest via Windows
+DPAPI + day-based log/screenshot retention) complete 2026-08-02, **and confirmed working on the user's real
+Windows machine** (`python -m src.doctor` reported DPAPI genuinely available after `pip install pywin32`).
+Full reasoning for both phases in `docs/DECISIONS.md`'s 2026-08-01/2026-08-02 entries. Phase 9 adds a
+distinct, non-blocking signal (`boundary_guard.check_injection_signal()`) for the different threat model
+of attacker-controlled on-screen content — separate from risk classification and the hard-boundary check,
+and deliberately never gates execution by itself, only flags the pattern for a human reviewing traces.
+Non-GUI suite: 195 → 320 tests passing, verified with `python -m pytest -q --ignore=tests/gui` in a build
+environment without PySide6/a display; the 232-test full-suite figure from 2026-07-13 (which includes 38
+GUI tests) was not re-verified in this same environment. **Still open:** real Windows DPI/multi-monitor
+scaling has not been exercised by any run so far; the `src/gui/worker.py` port of Phase 7's CLI-path fixes
+is unverified in any environment; Phase 9's injection signal is a phrase-bank heuristic (same class of tool
+as `risk_classifier.py`'s original keyword floor) that only inspects a step's own description/params, not
+the raw page content the planner read — a genuinely complete fix would need page-text extraction and
+diffing, out of scope here. Next up: Phase 10 (Track B data bootstrap).**
 
 ## Documentation files (`docs/` + root)
 
@@ -49,7 +51,8 @@ Windows machine. Next up: Phase 9 (injection-aware risk signal).**
 | `src/config.py` | 1.1 (updated Phase 6, 2026-08-01, Phase 8, 2026-08-02) | Complete (`risk_model_backend` accepts `"semantic"`; `log_retention_days` added) |
 | `src/doctor.py` | Phase 7 prep (2026-08-01), updated Phase 8 (2026-08-02) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer/encryption-at-rest without executing a real task. Not a substitute for Phase 7 itself. |
 | `requirements.txt` | 1.1 | Complete |
-| \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4, Phase 6) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning + Phase 6 always-on semantic boundary layer wired in) |
+| \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4, Phase 6, Phase 9) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning + Phase 6 always-on semantic boundary layer + Phase 9 non-blocking injection-signal check, both wired in) |
+| \`src/brain/boundary_guard.py\` | 1.0 (updated Phase 6, Phase 9) | Complete (hard-boundary `check()` + Phase 9's non-blocking `check_injection_signal()`, deliberately kept separate) |
 | `src/brain/planner.py` | 1.2 (updated Phase 4) | Complete (HostedLLMPlanner + optional LocalPlanner) |
 | `src/brain/risk_classifier.py` | 1.2 (updated Phase 5) | Complete (Phase 5 rule-table expansion + read-only guard) |
 | \`src/brain/replanner.py\` | 2.3 (updated Phase 4) | Complete (review_and_learn wired to memory) |
@@ -80,7 +83,7 @@ Windows machine. Next up: Phase 9 (injection-aware risk signal).**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (non-GUI: 310 passing — 195 Phases 1-5/GUI-facade/playwright + 18 Phase-6 semantic-layer/wiring + 6 real-pixel integration + 2 OCR regression + 70 Phase-7 live-bug-fix tests (see `docs/DECISIONS.md`'s 2026-08-01/02 entries for the 9 bugs these cover) + 19 Phase-8 encryption-at-rest/retention tests; see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/` | ongoing | In progress (non-GUI: 320 passing — 195 Phases 1-5/GUI-facade/playwright + 18 Phase-6 semantic-layer/wiring + 6 real-pixel integration + 2 OCR regression + 70 Phase-7 live-bug-fix tests (see `docs/DECISIONS.md`'s 2026-08-01/02 entries for the 9 bugs these cover) + 19 Phase-8 encryption-at-rest/retention tests + 10 Phase-9 injection-signal tests; see note above re: 38 GUI-only tests not re-verified this session) |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -143,7 +146,7 @@ behavior change until a human explicitly opts in via `.env`):
 |---|---|
 | `src/brain/planner.py`'s `LocalFineTunedPlanner` | Interface + wiring complete; no model trained yet |
 | `src/brain/risk_model_backend.py`'s `LocalFineTunedRiskModel` | Interface + wiring complete; no model trained yet |
-| `eval/adversarial_boundary_eval.py` + `eval/adversarial_cases.jsonl` | Complete, tested, already caught 2 real bugs in `risk_classifier.py` on first run |
+| `eval/adversarial_boundary_eval.py` + `eval/adversarial_cases.jsonl` | Complete, tested, already caught 2 real bugs in `risk_classifier.py` on first run. Phase 9 (2026-08-02) added a 5th case category (`prompt_injection`, 6 cases) scored separately by the new `eval/injection_signal_eval.py` (100% accuracy on its own case set), not folded into this harness since it scores a different kind of output (binary signal vs. risk/boundary verdict). |
 | `training/prepare_dataset.py` | Complete, tested, runs today (real data is empty/tiny until live usage exists) |
 | `training/train_lora.py` | Complete, correct, NOT runnable in this sandbox (no GPU) — ready for a real training machine |
 | `training/model_card_template.md` | Template ready; no model card filled out yet (no model trained yet) |
@@ -407,3 +410,23 @@ environment, so every test uses a reversible fake standing in for `win32crypt`. 
 their own Windows machine (after `pip install pywin32`) that `python -m src.doctor` reports encryption as
 available, and that existing episodic/semantic memory continues to work correctly afterward. Next
 scheduled: Phase 9 (injection-aware risk signal).
+
+---
+**Update 2026-08-02 (Phase 8 confirmed on real hardware):** The user ran `python -m src.doctor` on their
+real Windows machine after `pip install pywin32`, and it reported encryption-at-rest as genuinely
+available. Closes the "not yet verified against real DPAPI" caveat above.
+
+---
+**Update 2026-08-02 (Phase 9 COMPLETE — injection-aware risk signal):** New
+`boundary_guard.check_injection_signal()` — a distinct, non-blocking signal for the different threat model
+of attacker-controlled on-screen content, scored against a phrase bank of common prompt-injection framings.
+Deliberately never gates execution by itself (unlike the hard-boundary `check()` beside it) — Phase 9's own
+success criterion is that it's flagged distinctly in the trace log, not that it blocks anything. Wired into
+`orchestrator.py`'s `_check_injection_signal()`, called on every step in both the normal and replay loops.
+Added a 5th eval category (`prompt_injection`, 6 cases, independently written since no real captured attacks
+exist yet) and a small dedicated scorer (`eval/injection_signal_eval.py`, 100% accuracy). Non-GUI suite:
+310 → 320 tests passing. Full details in `docs/DECISIONS.md`'s matching entry. `docs/PHASES.md`'s Phase 9
+marked complete. Still open: this is a phrase-bank heuristic (same limits as `risk_classifier.py`'s
+original keyword floor) that only inspects a step's own description/params, not the raw page content the
+planner actually read — a fully complete fix would need page-text extraction and diffing, out of scope
+here. Next scheduled: Phase 10 (Track B data bootstrap).

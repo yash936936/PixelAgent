@@ -141,6 +141,7 @@ class Orchestrator:
                 outcome_status = "blocked_hard_boundary"
                 self._logger.log_step(step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)})
                 break
+            self._check_injection_signal(step_num, step)
 
             risk = self._classify_risk(step_num, step)
 
@@ -218,6 +219,7 @@ class Orchestrator:
                 self._check_boundary(idx, step)
             except BoundaryBlocked:
                 return idx - 1, False, any_edits
+            self._check_injection_signal(idx, step)
 
             risk = self._classify_risk(idx, step)
 
@@ -256,6 +258,26 @@ class Orchestrator:
         that doesn't expose last_call_cost (e.g. LocalPlanner, or a mock in
         tests) rather than raising, so this is purely additive."""
         return getattr(self._planner, "last_call_cost", 0.0) or 0.0
+
+    def _check_injection_signal(self, step_num: int, step: dict) -> None:
+        """Phase 9 (2026-08-02, docs/DECISIONS.md): a distinct, non-blocking
+        signal for the different threat model of attacker-controlled
+        on-screen content, separate from the hard-boundary check above.
+        Deliberately never raises, denies, or halts anything by itself --
+        see boundary_guard.check_injection_signal()'s docstring for why.
+        Runs on every step regardless of risk tier, unconditionally, same
+        as the hard-boundary check -- there's no config knob to disable
+        either."""
+        signal = boundary_guard.check_injection_signal(step)
+        if signal is not None:
+            self._logger.log_event(
+                step_num,
+                {
+                    "status": "possible_prompt_injection_signal",
+                    "matched_phrase": signal.matched_phrase,
+                    "step": step,
+                },
+            )
 
     def _check_boundary(self, step_num: int, step: dict) -> None:
         """Deterministic hard-boundary check, independent of the LLM
