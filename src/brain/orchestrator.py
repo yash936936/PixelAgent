@@ -164,15 +164,19 @@ class Orchestrator:
                     instruction, step, screen_state, history, step_num
                 )
             except BoundaryBlocked as exc:
-                self._logger.log_step(step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)})
+                self._logger.log_step(
+                    step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)}, risk=risk
+                )
                 outcome_status = "blocked_hard_boundary"
                 break
             except ReplanExhausted as exc:
-                self._logger.log_step(step_num, step, {"status": "replan_exhausted", "error": str(exc)})
+                self._logger.log_step(
+                    step_num, step, {"status": "replan_exhausted", "error": str(exc)}, risk=risk
+                )
                 outcome_status = "error"
                 break
             except Exception as exc:  # noqa: BLE001 - deliberately broad, logged not swallowed
-                self._logger.log_step(step_num, step, {"status": "error", "error": str(exc)})
+                self._logger.log_step(step_num, step, {"status": "error", "error": str(exc)}, risk=risk)
                 outcome_status = "error"
                 break
 
@@ -239,10 +243,12 @@ class Orchestrator:
             try:
                 outcome = self._execute_and_verify(instruction, step, screen_state, history, idx)
             except ReplanExhausted as exc:
-                self._logger.log_step(idx, step, {"status": "replay_replan_exhausted", "error": str(exc)})
+                self._logger.log_step(
+                    idx, step, {"status": "replay_replan_exhausted", "error": str(exc)}, risk=risk
+                )
                 return idx - 1, False, any_edits
             except Exception as exc:  # noqa: BLE001 - replay is best-effort, fall back to fresh planning
-                self._logger.log_step(idx, step, {"status": "replay_error", "error": str(exc)})
+                self._logger.log_step(idx, step, {"status": "replay_error", "error": str(exc)}, risk=risk)
                 return idx - 1, False, any_edits
 
             history.append({"step": step, "outcome": outcome})

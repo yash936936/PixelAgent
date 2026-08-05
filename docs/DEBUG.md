@@ -566,3 +566,33 @@ Append to the bottom of this file after each pass:
   worth noting as a pattern: any new action type added to `mouse_keyboard.py` in the future should default
   to a settle delay unless there's a specific reason not to, rather than waiting for each one to be found
   live individually.
+
+### [2026-08-02] Debug pass — Phase 10's own mining query was broken before it could mine anything real
+- Files checked: `src/observability/trace_replay.py`, `src/brain/orchestrator.py`'s risk-logging call
+  sites, plus every real Phase 7 trace log reconstructed from this session's earlier live-run exchanges.
+- Approach: rather than assume `unclassified_or_missing_risk()` (built in an earlier phase, never actually
+  run against real data before now) worked correctly, ran it for real first. It immediately produced
+  obviously-wrong output: 5 "gaps" in a single 7-step trace, including a step that had already succeeded
+  on an earlier attempt.
+- Issues found:
+  1. `unclassified_or_missing_risk()` flagged terminal `"done"` steps (which never get risk-classified by
+     design) and every intermediate replan-retry log line for a step_num that got retried (only the FINAL
+     entry for a step_num is what risk classification actually applies to). Fixed with an
+     exclude-done-actions filter and a last-entry-per-step_num deduplication pass.
+  2. Investigating why so many "final" entries still lacked risk even after fix #1 led to
+     `orchestrator.py`: risk WAS being classified before every step executed, but the three error-path
+     `log_step()` calls in `run_task()` (and the two equivalents in the replay loop) never threaded the
+     already-computed `risk` variable through — every error-terminated step logged `risk: null`
+     regardless of what tier it had actually been classified into. Fixed by passing `risk=risk` to all
+     five call sites.
+  3. After both fixes, re-ran the mining query against the same real data: zero denied gate decisions,
+     zero edited gate decisions, zero genuine unclassified-risk gaps. Confirmed this is the honest,
+     correct result — not a tool failure — since every real task so far completed without the user ever
+     needing to deny or edit a step.
+- Issues NOT fixed / not attempted: no real correction data exists yet to inform any change to
+  `semantic_matcher.py`'s exemplar banks, so none was added or fabricated. This remains open until a real
+  denied/edited gate decision or a genuine unclassified-risk case occurs in actual usage.
+- Tests run: `python -m pytest -q --ignore=tests/gui` — 333/333 passed (320 previous + 13 new).
+- Result: **Pass**, with two more real bugs found and fixed (bringing this session's live-data-driven bug
+  count well past ten) — and, distinctly from every prior entry today, an honest negative result reported
+  as the actual outcome of the phase rather than forced into a positive one.

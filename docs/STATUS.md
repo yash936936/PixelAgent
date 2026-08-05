@@ -6,25 +6,31 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 9 — Injection-aware risk signal, COMPLETE (2026-08-02).** Phases 1–5 (core loop through hardening)
-complete; native Windows GUI (PySide6) added 2026-07-12; Phase 6 (semantic risk/boundary layer live-wired
-into the orchestrator) complete 2026-08-01; Phase 7 (first real live validation on Windows) complete
-2026-08-02 — both browser and desktop execution paths completed a task end-to-end with zero errors, after
-nine distinct real bugs were found from actual traces and fixed; Phase 8 (encryption-at-rest via Windows
-DPAPI + day-based log/screenshot retention) complete 2026-08-02, **and confirmed working on the user's real
-Windows machine** (`python -m src.doctor` reported DPAPI genuinely available after `pip install pywin32`).
-Full reasoning for both phases in `docs/DECISIONS.md`'s 2026-08-01/2026-08-02 entries. Phase 9 adds a
-distinct, non-blocking signal (`boundary_guard.check_injection_signal()`) for the different threat model
-of attacker-controlled on-screen content — separate from risk classification and the hard-boundary check,
-and deliberately never gates execution by itself, only flags the pattern for a human reviewing traces.
-Non-GUI suite: 195 → 320 tests passing, verified with `python -m pytest -q --ignore=tests/gui` in a build
-environment without PySide6/a display; the 232-test full-suite figure from 2026-07-13 (which includes 38
-GUI tests) was not re-verified in this same environment. **Still open:** real Windows DPI/multi-monitor
-scaling has not been exercised by any run so far; the `src/gui/worker.py` port of Phase 7's CLI-path fixes
-is unverified in any environment; Phase 9's injection signal is a phrase-bank heuristic (same class of tool
-as `risk_classifier.py`'s original keyword floor) that only inspects a step's own description/params, not
-the raw page content the planner read — a genuinely complete fix would need page-text extraction and
-diffing, out of scope here. Next up: Phase 10 (Track B data bootstrap).**
+**Phase: 10 — Track B data bootstrap, COMPLETE (2026-08-02) with an honest zero result.** Phases 1–5
+complete; native Windows GUI added 2026-07-12; Phase 6 (semantic layer live-wired) complete 2026-08-01;
+Phase 7 (first real live validation) complete 2026-08-02 — both browser and desktop paths completed a task
+end-to-end with zero errors after nine real bugs found and fixed; Phase 8 (encryption-at-rest via Windows
+DPAPI + log retention) complete and **confirmed working on the user's real Windows machine**; Phase 9
+(injection-aware, non-blocking risk signal) complete. Full reasoning for all in `docs/DECISIONS.md`'s
+2026-08-01/2026-08-02 entries. **Phase 10 mined real Phase 7 trace data for risk-classification correction
+signal and found two more real bugs before it found any actual data**: `trace_replay.py`'s
+`unclassified_or_missing_risk()` was flagging terminal `"done"` steps and intermediate replan-retry log
+lines as false gaps (fixed with an exclusion + last-entry-per-step deduplication), and every
+error-terminated step was logging `risk: null` even though risk had already been classified, because five
+call sites in `orchestrator.py` never threaded the already-computed value through (fixed). After both
+fixes, the honest result across every real trace available: **zero denied gate decisions, zero edited gate
+decisions, zero genuine unclassified-risk gaps** — nothing was added to `semantic_matcher.py`'s exemplar
+banks, since there's genuinely nothing real to add yet. `training/mine_corrections.py` (new) is built,
+tested, and ready to surface real candidates the first time a user actually denies/edits a step or a
+genuine classification gap occurs. Non-GUI suite: 195 → 333 tests passing, verified with
+`python -m pytest -q --ignore=tests/gui` in a build environment without PySide6/a display; the 232-test
+full-suite figure from 2026-07-13 (which includes 38 GUI tests) was not re-verified in this same
+environment. **Still open:** real Windows DPI/multi-monitor scaling unverified; `src/gui/worker.py`'s
+Phase-7-fix port unverified; Phase 9's injection signal is a phrase-bank heuristic with the same limits as
+the original risk-classifier keyword floor; Phase 10's own success criterion (a measurable eval-recall
+improvement from real-data-informed exemplars) is explicitly NOT met, since no real correction data exists
+yet — `training/prepare_dataset.py`/`train_lora.py` remain blocked on a GPU regardless. Next up: Phase 11
+(packaging & distribution).**
 
 ## Documentation files (`docs/` + root)
 
@@ -62,7 +68,7 @@ diffing, out of scope here. Next up: Phase 10 (Track B data bootstrap).**
 | `src/confirmation/gate.py` | 1.4 (updated 2026-08-01) | Complete (fixed CLI unrecognized-input-silently-approves bug; added opt-in `auto_approve_external`, never applies to Destructive) |
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
 | `src/observability/logger.py` | 1.5 (updated Phase 4, updated Phase 8, 2026-08-02) | Complete (LoopAudit + log_event, llm_call accuracy; `prune_old_logs()` day-based retention for trace logs/screenshots) |
-| `src/observability/trace_replay.py` | 5 | Complete |
+| `src/observability/trace_replay.py` | 5 (updated Phase 10, 2026-08-02) | Complete (`unclassified_or_missing_risk()` fixed — real bug found mining actual trace data, was flagging `done` steps and replan-retry noise as false gaps) |
 | \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
@@ -83,7 +89,7 @@ diffing, out of scope here. Next up: Phase 10 (Track B data bootstrap).**
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress (non-GUI: 320 passing — 195 Phases 1-5/GUI-facade/playwright + 18 Phase-6 semantic-layer/wiring + 6 real-pixel integration + 2 OCR regression + 70 Phase-7 live-bug-fix tests (see `docs/DECISIONS.md`'s 2026-08-01/02 entries for the 9 bugs these cover) + 19 Phase-8 encryption-at-rest/retention tests + 10 Phase-9 injection-signal tests; see note above re: 38 GUI-only tests not re-verified this session) |
+| `tests/` | ongoing | In progress (non-GUI: 333 passing — 195 Phases 1-5/GUI-facade/playwright + 18 Phase-6 semantic-layer/wiring + 6 real-pixel integration + 2 OCR regression + 70 Phase-7 live-bug-fix tests + 19 Phase-8 encryption-at-rest/retention tests + 10 Phase-9 injection-signal tests + 13 Phase-10 mining-tool tests (see `docs/DECISIONS.md`'s 2026-08-01/02 entries for the 11 total bugs these cover); see note above re: 38 GUI-only tests not re-verified this session) |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -148,6 +154,7 @@ behavior change until a human explicitly opts in via `.env`):
 | `src/brain/risk_model_backend.py`'s `LocalFineTunedRiskModel` | Interface + wiring complete; no model trained yet |
 | `eval/adversarial_boundary_eval.py` + `eval/adversarial_cases.jsonl` | Complete, tested, already caught 2 real bugs in `risk_classifier.py` on first run. Phase 9 (2026-08-02) added a 5th case category (`prompt_injection`, 6 cases) scored separately by the new `eval/injection_signal_eval.py` (100% accuracy on its own case set), not folded into this harness since it scores a different kind of output (binary signal vs. risk/boundary verdict). |
 | `training/prepare_dataset.py` | Complete, tested, runs today (real data is empty/tiny until live usage exists) |
+| `training/mine_corrections.py` | Complete (Phase 10, 2026-08-02) — mines real trace logs for denied/edited gate decisions and genuine unclassified-risk gaps; run for real against reconstructed Phase 7 data, found two real bugs in the underlying query/logging before finding any actual correction data, then reported an honest zero-candidate result. Never auto-modifies `semantic_matcher.py`. |
 | `training/train_lora.py` | Complete, correct, NOT runnable in this sandbox (no GPU) — ready for a real training machine |
 | `training/model_card_template.md` | Template ready; no model card filled out yet (no model trained yet) |
 
@@ -430,3 +437,18 @@ marked complete. Still open: this is a phrase-bank heuristic (same limits as `ri
 original keyword floor) that only inspects a step's own description/params, not the raw page content the
 planner actually read — a fully complete fix would need page-text extraction and diffing, out of scope
 here. Next scheduled: Phase 10 (Track B data bootstrap).
+
+---
+**Update 2026-08-02 (Phase 10 COMPLETE — honest zero result):** Mined real Phase 7 trace data for risk-
+classification correction signal and found two more real bugs first: `trace_replay.py`'s
+`unclassified_or_missing_risk()` was flagging terminal `"done"` steps and intermediate replan-retry log
+lines as false gaps (fixed with exclusion + last-entry deduplication), and `orchestrator.py` was logging
+`risk: null` on every error-terminated step even though risk had already been classified, because five
+call sites never threaded the computed value through (fixed). After both fixes, the honest result across
+every real trace: zero denied gate decisions, zero edited gate decisions, zero genuine unclassified-risk
+gaps. `semantic_matcher.py` was NOT modified — there's nothing real to add yet. New
+`training/mine_corrections.py` is built, tested, and ready to surface real candidates automatically once
+they exist. Non-GUI suite: 320 → 333 tests passing. Full details in `docs/DECISIONS.md`'s matching entry.
+`docs/PHASES.md`'s Phase 10 marked complete, with its own success criterion explicitly NOT met (no real
+data existed to inform any measurable eval improvement) rather than forced. Next scheduled: Phase 11
+(packaging & distribution).

@@ -1164,3 +1164,61 @@ Phase 3 build
   `semantic_matcher.py` machinery). Also still open: this only inspects the step's own description/params,
   not the actual raw page content the planner read to produce that description — a genuinely complete
   fix would require page-text extraction and diffing, not attempted in this pass.
+
+### [2026-08-02] Phase 10 — mining real Phase 7 trace data found two real bugs before it found any
+  correction data; the honest result is zero exemplars to add yet
+- **Type:** New (multiple) + Overwrite (multiple)
+- **File(s) affected:** `src/observability/trace_replay.py`, `src/brain/orchestrator.py`,
+  `training/mine_corrections.py` (new), `tests/observability/test_trace_replay.py`,
+  `tests/brain/test_orchestrator.py`, `tests/training/test_mine_corrections.py` (new).
+- **What changed:** Per `docs/PHASES.md`'s Phase 10 scope, reconstructed the real Phase 7 trace logs from
+  this session's earlier live-run exchanges (the actual JSONL content the user pasted into the
+  conversation) as local files and ran `TraceReplay.unclassified_or_missing_risk()` against them for
+  real, rather than assuming it would work correctly. It didn't:
+  1. **`unclassified_or_missing_risk()` itself was flagging noise, not gaps.** Against real data it
+     immediately over-counted: terminal `"done"` steps (which `orchestrator.py` special-cases before ever
+     calling `_classify_risk()`, so `risk=None` is correct, not a gap) and intermediate replan-retry log
+     lines (a step_num retried multiple times writes one `"step"` log entry per attempt, and only the
+     FINAL settled entry is what risk classification actually applies to — the in-between attempts
+     structurally never carry risk). Fixed by excluding `action == "done"` outright and deduplicating to
+     only the last-logged entry per `step_num` before checking for a missing risk field.
+  2. **Every error-terminated step logged `risk=null` even though risk had already been classified.**
+     Root cause: `run_task()`'s main loop and the replay loop both compute `risk = self._classify_risk(...)`
+     BEFORE the try/except block that executes and verifies the step — but all three error-path
+     `log_step()` calls (`hard_boundary_blocked` raised during execution, `replan_exhausted`, and the
+     generic `except Exception`) never passed `risk=risk` through, so every one of them wrote `risk: null`
+     to the trace regardless of what was actually classified. Fixed by threading `risk=risk` through all
+     five affected call sites (three in the main loop, two in the replay loop).
+  3. **After both fixes, mined the real data honestly: zero denied gate decisions, zero edited gate
+     decisions, and zero genuine unclassified-risk gaps** across every real Phase 7 trace available. The
+     three "unclassified_risk" hits the original (buggy) query found were entirely explained by bug #2
+     above — real corrections found were exactly zero once the logging gap that manufactured them was
+     fixed. This is reported as the honest result, not worked around: `semantic_matcher.py`'s exemplar
+     banks were NOT modified with fabricated or forced data, since there is genuinely nothing real to add
+     yet. Every real task the user has run so far completed (eventually) without the user ever needing to
+     deny or edit a step, and Phase 9's injection-signal work already confirmed none of the real traces
+     contained anything injection-shaped either.
+  4. **`training/mine_corrections.py`** (new): the actual mining tool, combining
+     `denied_gate_decisions()`, `edited_gate_decisions()`, and the now-fixed
+     `unclassified_or_missing_risk()` into one scan across every trace file in a log directory. Returns
+     `CorrectionCandidate` objects, deliberately does NOT auto-modify `semantic_matcher.py` — a human
+     should review each candidate before it becomes a permanent exemplar, the same caution this project
+     has applied to every other exemplar-bank change so far. Prints an honest "no candidates found" message
+     when the scan turns up nothing, rather than pretending there's always something to report.
+- **Why:** This is exactly the value of actually running the tool against real data instead of assuming it
+  works, which is the entire discipline this project has followed since Phase 7 — mining real trace data
+  found two real, previously-invisible bugs in the mining infrastructure itself before it could be trusted
+  to find anything else, and then delivered an honest "there's nothing here yet" rather than a forced
+  result.
+- **Impacts:** 320 → 333 tests passing (+13: 3 `test_trace_replay.py` covering the done-exclusion,
+  final-entry-only deduplication, and a guard against over-correcting into never flagging a genuine gap;
+  1 `test_orchestrator.py` proving risk is threaded through the error path; 9 `test_training/
+  test_mine_corrections.py` covering all three correction sources, the done/replan-noise exclusion
+  inherited from the fixed query, the honest-empty-result case, multi-file scanning, a missing directory,
+  and a malformed trace file not crashing the whole scan). `docs/PHASES.md`'s Phase 10 success criterion
+  ("a measurable recall improvement... from real-data-informed exemplars") is explicitly NOT met — there
+  is no real correction data yet to inform any exemplar addition, and none was fabricated to force the
+  criterion. The infrastructure (fixed mining query, `mine_corrections.py`) is built, tested, and ready to
+  surface real candidates automatically the first time a user actually denies or edits a gate decision, or
+  a step genuinely reaches a final outcome with no risk classified. `training/prepare_dataset.py`/
+  `train_lora.py` remain blocked on a GPU regardless, unchanged by this phase.

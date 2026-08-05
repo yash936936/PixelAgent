@@ -186,10 +186,36 @@ class TraceReplay:
         return [e for e in self.events if e.type == "gate_decision"]
 
     def unclassified_or_missing_risk(self) -> list[TraceEvent]:
-        """Every step event with no risk recorded at all -- a gap that Phase
-        5's success criterion ("no unclassified/misclassified risk cases")
-        is checking for directly."""
-        return [e for e in self.steps() if not e.risk]
+        """Every FINAL step event with no risk recorded at all -- a gap that
+        Phase 5's success criterion ("no unclassified/misclassified risk
+        cases") is checking for directly.
+
+        Fix for a real bug found live on 2026-08-02 (docs/DECISIONS.md,
+        Phase 10) -- running this for the first time against real Phase 7
+        trace data immediately produced garbage: it was flagging (a)
+        terminal "done" steps, which orchestrator.py special-cases BEFORE
+        ever calling _classify_risk() and so correctly never carry a risk
+        field, and (b) intermediate "replanned"/"replay_error" log lines
+        for a step_num that gets retried multiple times -- each retry
+        attempt writes its own step-type log line, but only the step_num's
+        FINAL settled entry (the one that actually executed, errored out
+        for good, or completed) is the one risk classification actually
+        applies to; the in-between attempts are retry bookkeeping, not
+        independently-classified actions.
+
+        Now: excludes action == "done" outright, and for step_nums with
+        multiple logged entries, only considers the LAST one (by log
+        order) -- matching what a human reading the trace top-to-bottom
+        would recognize as "what actually happened" for that step,
+        ignoring the retries in between."""
+        last_entry_per_step: dict[int | None, TraceEvent] = {}
+        for e in self.steps():
+            last_entry_per_step[e.step_num] = e  # later entries overwrite earlier ones
+
+        return [
+            e for e in last_entry_per_step.values()
+            if not e.risk and (e.step or {}).get("action") != "done"
+        ]
 
     def edited_gate_decisions(self) -> list[TraceEvent]:
         return [e for e in self.gate_decisions() if e.edited]

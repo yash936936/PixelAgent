@@ -297,15 +297,27 @@ content, which would need separate text-extraction-and-diffing plumbing not atte
 ---
 
 ## Phase 10 — Track B data bootstrap (bridge to real training)
+**Status: COMPLETE (2026-08-02), with an honest zero result.** Mining real Phase 7 trace data found two
+real bugs in the mining infrastructure itself before it found any correction data (see
+`docs/DECISIONS.md`'s matching entry) — both fixed. After fixing, the actual mined result across every
+real trace available: zero denied gate decisions, zero edited gate decisions, zero genuine
+unclassified-risk gaps. `semantic_matcher.py`'s exemplar banks were deliberately NOT modified, since there
+is nothing real to inform a change yet.
+
 | File | Description |
 |---|---|
-| `src/observability/trace_replay.py` | Use `unclassified_or_missing_risk()` against Phase 7's real logs to mine actual correction examples. |
-| `src/brain/semantic_matcher.py` (updated) | Expand exemplar banks with real logged phrasing, not just hand-written paraphrases — a cheap bridge step before full LoRA training. |
-| `training/prepare_dataset.py`, `training/train_lora.py` | Only runnable once Phase 7 has produced enough real data and a real GPU machine is available — unchanged blocker, not resolved by this phase. |
+| `src/observability/trace_replay.py` (updated) | `unclassified_or_missing_risk()` fixed — was flagging terminal `"done"` steps and intermediate replan-retry log lines as false gaps against real data. Now excludes `done` actions and only considers the final logged entry per `step_num`. |
+| `src/brain/orchestrator.py` (updated) | Fixed a related real bug found during the same investigation: risk was already classified before every step executed, but five error-path `log_step()` call sites never threaded it through, so every error-terminated step logged `risk: null` regardless of its actual tier. |
+| `training/mine_corrections.py` (new) | The actual mining tool — combines `denied_gate_decisions()`, `edited_gate_decisions()`, and the fixed `unclassified_or_missing_risk()` into one scan. Deliberately never auto-modifies `semantic_matcher.py`; surfaces candidates for human review. Prints an honest "no candidates found" message rather than forcing a result. |
+| `src/brain/semantic_matcher.py` | **Not updated** — no real correction data exists yet to inform a change. |
+| `training/prepare_dataset.py`, `training/train_lora.py` | Still only runnable once enough real data exists and a real GPU machine is available — unchanged blocker, not resolved by this phase. |
 
-**Phase 10 success criterion:** `eval/adversarial_boundary_eval.py --model semantic` shows a measurable
-recall improvement on `evasive_destructive`/`boundary_evasion` from real-data-informed exemplars, as a
-checkpoint before attempting the full trained-model gate in `eval/README.md`.
+**Phase 10 success criterion: NOT MET, explicitly and honestly.** `eval/adversarial_boundary_eval.py
+--model semantic` shows no change, because no real-data-informed exemplars were added — there was nothing
+real to inform them with. This is reported as the actual outcome of the phase, not worked around or
+fabricated. `training/mine_corrections.py` is built, tested, and ready to surface real candidates
+automatically the first time a user genuinely denies or edits a gate decision, or a step reaches a final
+outcome with no risk classified.
 
 ---
 

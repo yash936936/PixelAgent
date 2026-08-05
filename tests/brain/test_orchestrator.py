@@ -218,6 +218,31 @@ def test_no_injection_signal_logged_for_ordinary_steps():
     assert injection_events == []
 
 
+def test_error_path_still_logs_the_risk_that_was_already_classified():
+    """Real bug found live on 2026-08-02 (docs/DECISIONS.md, Phase 10):
+    mining real Phase 7 trace data for risk-classification gaps surfaced
+    that every error-terminated step logged risk=null even though risk
+    HAD already been classified earlier in the loop -- the error-path
+    log_step() calls simply never threaded it through. This directly
+    verifies the fix: risk must be passed even when the step ultimately
+    errors out."""
+    orch, action_router, gate, logger = make_orchestrator(
+        planner_steps=[
+            {"action": "click", "description": "Click the search button",
+             "target_type": "web", "params": {}},
+        ],
+    )
+    action_router.execute.side_effect = RuntimeError("boom")
+    orch.run_task("do something ordinary")
+
+    error_calls = [
+        call for call in logger.log_step.call_args_list
+        if len(call.args) > 2 and isinstance(call.args[2], dict) and call.args[2].get("status") == "error"
+    ]
+    assert len(error_calls) == 1
+    assert error_calls[0].kwargs.get("risk") is not None
+
+
 def test_hard_boundary_step_blocks_task_without_gating():
     orch, action_router, gate, logger = make_orchestrator(
         planner_steps=[

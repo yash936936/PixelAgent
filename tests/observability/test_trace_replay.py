@@ -125,6 +125,62 @@ def test_unclassified_or_missing_risk(tmp_path):
     assert gaps[0].step_num == 2
 
 
+def test_unclassified_or_missing_risk_excludes_done_actions(tmp_path):
+    """Real bug found live on 2026-08-02 (docs/DECISIONS.md, Phase 10):
+    running this against real Phase 7 trace data flagged terminal 'done'
+    steps as risk-classification gaps -- but orchestrator.py special-cases
+    action=='done' BEFORE ever calling _classify_risk(), so risk=None is
+    correct for those, not a gap."""
+    p = tmp_path / "task_done.jsonl"
+    _write_trace(
+        p,
+        [{"type": "step", "step_num": 1, "step": {"action": "done"}, "outcome": {"status": "task_complete"}, "risk": None}],
+    )
+    replay = TraceReplay.load(p)
+    assert replay.unclassified_or_missing_risk() == []
+
+
+def test_unclassified_or_missing_risk_only_considers_final_entry_per_step(tmp_path):
+    """Real bug found live on 2026-08-02: a step_num retried via replan
+    writes multiple 'step' log lines, and only the intermediate
+    retry-attempt lines structurally lack risk -- the FINAL settled entry
+    is what risk classification actually applies to. Must not flag a
+    step_num as a gap just because an in-between retry attempt lacked
+    risk, when the final entry has it."""
+    p = tmp_path / "task_replan.jsonl"
+    _write_trace(
+        p,
+        [
+            {"type": "step", "step_num": 1, "step": {"action": "click"},
+             "outcome": {"status": "replanned"}, "risk": None},
+            {"type": "step", "step_num": 1, "step": {"action": "click"},
+             "outcome": {"status": "executed"}, "risk": "external"},
+        ],
+    )
+    replay = TraceReplay.load(p)
+    assert replay.unclassified_or_missing_risk() == []
+
+
+def test_unclassified_or_missing_risk_still_catches_a_genuinely_final_gap(tmp_path):
+    """Guard against the fix above over-correcting into never flagging
+    anything -- if the FINAL entry for a step_num genuinely has no risk
+    (and isn't a 'done' action), it must still be caught."""
+    p = tmp_path / "task_genuine_gap.jsonl"
+    _write_trace(
+        p,
+        [
+            {"type": "step", "step_num": 1, "step": {"action": "click"},
+             "outcome": {"status": "replanned"}, "risk": None},
+            {"type": "step", "step_num": 1, "step": {"action": "click"},
+             "outcome": {"status": "error"}, "risk": None},
+        ],
+    )
+    replay = TraceReplay.load(p)
+    gaps = replay.unclassified_or_missing_risk()
+    assert len(gaps) == 1
+    assert gaps[0].outcome["status"] == "error"
+
+
 def test_edited_and_denied_gate_decisions(tmp_path):
     p = tmp_path / "task_5.jsonl"
     _write_trace(
