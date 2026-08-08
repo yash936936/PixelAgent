@@ -1,0 +1,34 @@
+# PixelAgent .dockerignore (Phase 12, docs/DECISIONS.md 2026-08-02)
+# Keeps the build context lean -- none of this is needed inside the image.
+
+.git/
+.gitignore
+.pytest_cache/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+tests/
+tests_check/
+training/
+eval/
+
+docs/
+*.md
+!README.md
+
+logs/
+profiles/
+*.db
+
+.env
+.env.example.local
+
+installer/
+dist/
+build/
+*.egg-info/
+
+.vscode/
+.idea/

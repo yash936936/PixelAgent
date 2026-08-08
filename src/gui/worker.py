@@ -99,10 +99,17 @@ class TaskWorker(QThread):
             replanner = Replanner(planner=planner)
             memory = MemoryAPI(log_dir=self._cfg.log_dir)
 
-            try:
-                mouse_keyboard = MouseKeyboard()
-            except Exception:  # noqa: BLE001 — desktop control optional, see main.py
+            # Fix (2026-08-02, docs/DECISIONS.md, Phase 12): execution_mode wired into main.py's
+            # desktop-backend construction but ported here in the same pass this time, per the
+            # earlier CLI/GUI-parity lesson (TESSERACT_CMD/AUTO_APPROVE_EXTERNAL were fixed in
+            # main.py first and only found missing here later).
+            if self._cfg.execution_mode == "browser_only":
                 mouse_keyboard = None
+            else:
+                try:
+                    mouse_keyboard = MouseKeyboard()
+                except Exception:  # noqa: BLE001 — desktop control optional, see main.py
+                    mouse_keyboard = None
             # Fix (2026-08-01, docs/DECISIONS.md): TESSERACT_CMD was wired into main.py's OCREngine
             # construction but never ported to this GUI worker path -- same gap as auto_approve_external
             # above. Without this, a user with Tesseract installed-but-not-on-PATH could pass

@@ -1,0 +1,45 @@
+# PixelAgent — browser-only Docker deployment (Phase 12, docs/DECISIONS.md 2026-08-02)
+# NOT BUILT OR RUN in this project's build environment (no docker daemon available here).
+# See docs/DOCKER.md for the actual build/run/verify steps.
+#
+# `docker compose up` alone runs the default smoke-test `command` below --
+# satisfies Phase 12's own success criterion ("a browser-only task runs
+# successfully end-to-end... from a fresh docker compose up") without
+# requiring the person to already know the CLI's argv-based task syntax
+# just to see it work once. For any REAL task, override the command:
+#     docker compose run --rm pixel-agent "your real instruction here"
+
+services:
+  pixel-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Required — no default, this must be a real key. See docs/DOCKER.md.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:?GEMINI_API_KEY must be set — see docs/DOCKER.md}
+      - EXECUTION_MODE=browser_only
+      # Auto-approve External-risk steps (docs/DECISIONS.md 2026-08-01) --
+      # there is no interactive terminal to approve a prompt inside a
+      # detached container, so this is the only sane default for
+      # unattended container use. Destructive-risk steps STILL require
+      # the confirm phrase regardless (see ConfirmationGate's own
+      # docstring) -- this setting can never bypass that, by design.
+      - AUTO_APPROVE_EXTERNAL=true
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash}
+      - LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS:-14}
+    volumes:
+      # Persistent across container restarts, per Phase 12's success
+      # criterion -- named volumes, not bind mounts, so this works
+      # identically regardless of host OS/path conventions.
+      - pixel_logs:/app/logs
+      - pixel_profiles:/app/profiles
+    # Default smoke-test task -- deliberately simple and side-effect-free
+    # (a plain navigation, Local risk tier, no gate involved) so a fresh
+    # `docker compose up` demonstrates real end-to-end success without
+    # needing GEMINI_API_KEY-consuming back-and-forth or an approval
+    # prompt nothing inside the container could answer anyway.
+    command: ["open example.com"]
+
+volumes:
+  pixel_logs:
+  pixel_profiles:

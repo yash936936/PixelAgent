@@ -76,12 +76,30 @@ def _build_desktop_backends(cfg):
     cfg.tesseract_cmd (2026-08-01, Phase 7 prep) lets OCREngine find
     Tesseract when it's installed but not on PATH -- the exact failure mode
     src/doctor.py's Tesseract check surfaces. None (the default) falls back
-    to relying on PATH, unchanged from before."""
-    try:
-        mouse_keyboard = MouseKeyboard()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] Desktop control unavailable ({exc}); web-only mode.")
+    to relying on PATH, unchanged from before.
+
+    cfg.execution_mode == "browser_only" (2026-08-02, Phase 12,
+    docs/DECISIONS.md): skips even attempting to construct MouseKeyboard.
+    This is a distinct, better startup experience than the generic
+    "unavailable" warning below -- inside the Docker image (Dockerfile),
+    desktop control isn't accidentally missing, it's structurally
+    impossible (no real display exists in a headless Linux container), so
+    the message should say that plainly rather than looking like a
+    runtime failure worth investigating."""
+    if cfg.execution_mode == "browser_only":
+        print(
+            "[info] EXECUTION_MODE=browser_only — desktop control is intentionally disabled "
+            "(e.g. running in the Docker image, which has no real display). Browser-only "
+            "tasks are unaffected; any target_type='desktop' step will fail immediately and "
+            "explicitly rather than mid-task."
+        )
         mouse_keyboard = None
+    else:
+        try:
+            mouse_keyboard = MouseKeyboard()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Desktop control unavailable ({exc}); web-only mode.")
+            mouse_keyboard = None
 
     ocr_engine = OCREngine(tesseract_cmd=cfg.tesseract_cmd)  # cheap to construct; fails only when .read() is called
     return mouse_keyboard, ocr_engine
@@ -158,8 +176,19 @@ def main(instruction: str) -> dict:
     return result
 
 
-if __name__ == "__main__":
+def cli_main() -> None:
+    """Zero-argument entry point for the `pixel` console command
+    (pyproject.toml's [project.scripts], Phase 11, docs/DECISIONS.md
+    2026-08-02) -- reads sys.argv itself, since console_scripts entry
+    points are called with no arguments. `python -m src.main "..."` below
+    still works identically; this is the same logic, just callable from an
+    installed command on PATH instead of only from inside a source
+    checkout."""
     if len(sys.argv) < 2:
-        print('Usage: python -m src.main "your instruction here"')
+        print('Usage: pixel "your instruction here"  (or: python -m src.main "your instruction here")')
         sys.exit(1)
     main(" ".join(sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    cli_main()

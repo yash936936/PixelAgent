@@ -1,22 +1,29 @@
-# Secrets / environment
-.env
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Installer output
+installer/dist/
+installer/staging/
 
 # Python
 __pycache__/
-*.py[cod]
-*.egg-info/
+*.pyc
 .pytest_cache/
-.venv/
 venv/
+*.egg
 
-# Playwright / Chrome profiles (contain real logged-in sessions — never commit)
-profiles/
+# Env / secrets — never commit real keys
+.env
 
-# Logs / traces / screenshots
+# Logs and local data (per Phase 8's retention model — these are runtime output, not source)
 logs/
-*.png
-*.jpg
+*.jsonl
+episodic_memory.db
+semantic_memory.db
 
-# OS cruft
-.DS_Store
+# OS/editor cruft
+.vscode/
 Thumbs.db

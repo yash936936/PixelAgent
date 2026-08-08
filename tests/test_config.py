@@ -10,7 +10,7 @@ def _clean_env(monkeypatch):
     for key in (
         "GEMINI_API_KEY", "LLM_MODEL", "PLANNER_BACKEND", "LOCAL_PLANNER_ENDPOINT",
         "RISK_MODEL_BACKEND", "LOCAL_RISK_MODEL_ENDPOINT", "TESSERACT_CMD", "AUTO_APPROVE_EXTERNAL",
-        "RATE_LIMIT_MAX_ATTEMPTS", "RATE_LIMIT_MAX_BACKOFF_SECONDS", "LOG_RETENTION_DAYS",
+        "RATE_LIMIT_MAX_ATTEMPTS", "RATE_LIMIT_MAX_BACKOFF_SECONDS", "LOG_RETENTION_DAYS", "EXECUTION_MODE",
         "DEFAULT_CHROME_PROFILE", "PROFILES_DIR", "MAX_STEPS_PER_TASK", "LOG_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -124,6 +124,37 @@ def test_default_log_retention_days(tmp_path, monkeypatch):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
     assert cfg.log_retention_days == 14
+
+
+def test_default_execution_mode_is_full_desktop(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.execution_mode == "full_desktop"
+
+
+def test_execution_mode_browser_only_is_accepted(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "browser_only")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.execution_mode == "browser_only"
+
+
+def test_execution_mode_case_insensitive(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "BROWSER_ONLY")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    cfg = config.load(env_path=str(tmp_path / "does_not_exist.env"))
+    assert cfg.execution_mode == "browser_only"
+
+
+def test_invalid_execution_mode_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "something_else")
+    monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    with pytest.raises(RuntimeError, match="EXECUTION_MODE"):
+        config.load(env_path=str(tmp_path / "does_not_exist.env"))
 
 
 def test_log_retention_days_is_parsed(tmp_path, monkeypatch):
