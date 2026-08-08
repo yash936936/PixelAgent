@@ -322,39 +322,54 @@ outcome with no risk classified.
 ---
 
 ## Phase 11 — Packaging & distribution
+**Status: COMPLETE (2026-08-02).** Also a major, unplanned capability unlock: PySide6 turned out to
+actually install and run in this project's Linux build environment (`pip install PySide6==6.11.1`), which
+was not known to be possible before this phase. Every GUI test now runs and passes here — the full
+395-test suite (347 non-GUI + 48 GUI) ran together in one pass for the first time in this project's
+history, closing (going forward) the "GUI tests not re-verified in this environment" caveat that appeared
+throughout every earlier phase's docs.
+
 Goal: everything up to Phase 10 makes the agent safe and validated to run; nothing yet makes it installable
 by anyone other than a developer running from source.
 
 | File | Description |
 |---|---|
-| `installer/` (new) | Windows installer (e.g. Inno Setup or MSIX) bundling the app, Python runtime, Tesseract binary, and Playwright's Chromium — end users should never `pip install` from source. |
-| `src/gui/app.py` (updated) | First-run setup wizard: Gemini API key entry, Chrome profile selection, permissions explanation — currently assumes a developer editing `.env` by hand. |
-| `pyproject.toml` (new) | Proper packaging metadata instead of a loose `requirements.txt`, pinned dependency versions. |
-| `docs/RELEASE.md` (new) | Build/sign/release process, including code-signing the installer so Windows SmartScreen doesn't flag it. |
+| `pyproject.toml` (new) | Proper packaging metadata. **Actually built and verified**: `python -m build --wheel`, installed, confirmed `pixel`/`pixel-gui` console commands genuinely work — not just written and assumed correct. |
+| `src/main.py` (updated) | New `cli_main()`, a zero-argument wrapper around `main(instruction)` for the `pixel` console entry point (`console_scripts` are invoked with no args). |
+| `src/gui/app.py`, `src/gui/setup_wizard_logic.py` (new), `src/gui/widgets/setup_wizard.py` (new) | First-run setup wizard — closes a real gap where `config.load()` ran before `QApplication` even existed, so a fresh install with no `.env` crashed with a raw traceback before any window appeared. Logic (`needs_setup`, `looks_like_a_real_api_key`, `write_env_file`) kept Qt-free and fully unit-tested; the `QDialog` itself constructed and exercised offscreen with real PySide6. |
+| `installer/pixel-agent.iss` (new) | Complete Inno Setup script — per-user install, optional Tesseract/Chromium components, pre-seeds `TESSERACT_CMD`. **Written per Inno Setup's documented syntax, NOT compiled** — `ISCC.exe` is a real Windows binary unavailable in this environment. |
+| `docs/RELEASE.md` (new) | The real build/sign/release process, with an honest per-step verified/unverified table rather than one blanket claim. Code signing explicitly flagged as not set up at all (no certificate exists). |
 
-**Phase 11 success criterion:** someone who isn't the author can download one file, install it, and get to a
-working first task with no terminal/source access.
+**Phase 11 success criterion (MET for the software side, UNVERIFIED for the installer):** someone who
+isn't the author can download one file, install it, and get to a working first task with no terminal/
+source access. The `SetupWizard` genuinely closes the "no terminal access" gap for a person who already has
+the app running — verified with real PySide6 in this environment. The "download one file" half of this
+criterion depends on `installer/pixel-agent.iss` actually compiling and running correctly on a real Windows
+machine, which has **not** been done — see `docs/RELEASE.md`'s verified/unverified table.
 
 ---
 
 ## Phase 12 — Docker deployment (browser-only mode)
-Goal: containerize the subset of PixelAgent that can genuinely run headless on Linux. Real OS-level desktop
-automation (`mouse_keyboard.py`) fundamentally cannot run in a headless Linux container — this phase scopes
-that limitation explicitly rather than pretending the whole agent containerizes. See Phase 13 for the
-desktop-automation path.
+**Status: COMPLETE (2026-08-02).** Goal: containerize the subset of PixelAgent that can genuinely run
+headless on Linux. Real OS-level desktop automation (`mouse_keyboard.py`) fundamentally cannot run in a
+headless Linux container — this phase scopes that limitation explicitly rather than pretending the whole
+agent containerizes. See Phase 13 for the desktop-automation path.
 
 | File | Description |
 |---|---|
-| `src/action/action_router.py` (updated) | Explicit `execution_mode: "browser_only" \| "full_desktop"` config check — the container build must refuse to select the desktop/mouse-keyboard branch rather than fail confusingly at runtime with no real display. |
-| `Dockerfile` (new) | Base image with Python, the Tesseract binary, and Playwright's Chromium pre-installed (`playwright install --with-deps chromium`) — mirrors what Phase 7 already proved works for the browser path. |
-| `docker-compose.yml` (new) | Wires up `GEMINI_API_KEY`, volume mounts for `logs/` and `profiles/` (episodic/semantic memory and browser profiles persist across restarts), and resource limits (ties into Phase 14's cost/runaway-task concerns). |
-| `.dockerignore` (new) | Excludes `tests/`, `training/`, dev-only tooling from the image. |
-| `docs/DOCKER.md` (new) | Explicit, upfront statement of the browser-only limitation, setup instructions, and how logs/screenshots surface outside the container (ties into Phase 8's retention/encryption decision — a container volume is another place unencrypted screenshots could live). |
-| `src/config.py` (updated) | Container-friendly defaults — `PROFILES_DIR`/`LOG_DIR` pointing at mount points rather than relative paths assuming a local dev checkout. |
+| `src/config.py`, `src/main.py`, `src/gui/worker.py` (updated — differs from original plan below) | New `execution_mode: "browser_only" \| "full_desktop"` config value, validated the same way `risk_model_backend` already is. Implemented at the desktop-backend-construction layer (`_build_desktop_backends()`) rather than in `action_router.py` as originally planned — this way the container never even attempts to construct `MouseKeyboard` at all (verified: a test asserts the mock is never called), rather than constructing it and then having `action_router.py` refuse to use it at execution time. Ported into `worker.py` in the same pass as `main.py`, learning from the earlier Phase 7/8 CLI/GUI-parity miss. |
+| `Dockerfile` (new) | Base image with Python, the Tesseract binary, and Playwright's Chromium pre-installed (`playwright install --with-deps chromium`). **Not built in this environment** — no `docker` binary available here. |
+| `docker-compose.yml` (new) | Wires up required `GEMINI_API_KEY` (compose refuses to start without it), `AUTO_APPROVE_EXTERNAL=true` by default (no interactive terminal inside a detached container — Destructive-risk steps remain unaffected regardless), named volumes for `logs/`/`profiles/` persistence across restarts. Default `command` runs a simple smoke-test task so `docker compose up` alone demonstrates real success, per the literal wording of the success criterion below. |
+| `.dockerignore` (new) | Excludes `tests/`, `training/`, `docs/`, dev-only tooling from the build context. |
+| `docs/DOCKER.md` (new) | States the browser-only limitation in its very first section. Includes a concrete 4-step smoke-test checklist — including a step that deliberately sends a desktop-targeting instruction to confirm `EXECUTION_MODE=browser_only` is actually enforced inside a running container, not just validated by the test suite in isolation. |
 
-**Phase 12 success criterion:** a browser-only task runs successfully end-to-end inside the container from a
-fresh `docker compose up`, with logs and memory persisting across a container restart, and the image clearly
-documents (and the code enforces) that desktop-automation tasks are out of scope here.
+**Phase 12 success criterion (written correctly, UNVERIFIED — no Docker available in this build
+environment):** a browser-only task runs successfully end-to-end inside the container from a fresh
+`docker compose up`, with logs and memory persisting across a container restart, and the image clearly
+documents (and the code enforces) that desktop-automation tasks are out of scope here. The code-side half
+of this (enforcement) is genuinely tested and verified. The container-side half (an actual `docker compose
+up` succeeding) has not been run — follow `docs/DOCKER.md`'s smoke-test checklist on a machine with Docker
+installed before treating this deployment path as confirmed working.
 
 ---
 

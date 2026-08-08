@@ -1222,3 +1222,153 @@ Phase 3 build
   surface real candidates automatically the first time a user actually denies or edits a gate decision, or
   a step genuinely reaches a final outcome with no risk classified. `training/prepare_dataset.py`/
   `train_lora.py` remain blocked on a GPU regardless, unchanged by this phase.
+
+### [2026-08-02] Phase 11 — packaging & distribution, plus a major capability unlock: PySide6 now
+  installs and runs in this build environment
+- **Type:** New (multiple) + Overwrite (multiple)
+- **File(s) affected:** `pyproject.toml` (new), `src/main.py`, `src/gui/app.py`, `src/gui/setup_wizard_logic.py`
+  (new), `src/gui/widgets/setup_wizard.py` (new), `installer/pixel-agent.iss` (new), `docs/RELEASE.md`
+  (new), `tests/test_setup_wizard_logic.py` (new), `tests/gui/test_setup_wizard.py` (new),
+  `tests/gui/test_app.py` (new).
+- **Capability unlock, worth recording on its own:** every prior entry in this log involving GUI code
+  (Phase 6-10's `TESSERACT_CMD`/`AUTO_APPROVE_EXTERNAL`/`prune_old_logs()` wiring in `src/gui/worker.py`,
+  every GUI test file) noted "unverified in this build environment" because PySide6 was assumed
+  uninstallable here. It isn't — `pip install PySide6==6.11.1 --break-system-packages` succeeded, and
+  `QT_QPA_PLATFORM=offscreen python -m pytest tests/gui/` passed all 37 pre-existing GUI tests
+  immediately. This is the first time in this project's history that the FULL test suite (395 tests,
+  GUI included) has been run together in one pass, rather than the non-GUI subset with GUI tests
+  perpetually excluded. Spot-checked `worker.py`'s earlier fixes import and construct correctly under
+  real PySide6 as a direct result. Not a full re-audit of every historical GUI change, but a real,
+  meaningful narrowing of what "unverified" actually means going forward for GUI work in this environment.
+- **What changed:**
+  1. **`pyproject.toml`** (new): proper Python packaging metadata replacing the loose
+     `requirements.txt`-only approach — `pip install .` did not work from this repo before this. Declares
+     `[project.scripts]` console entry points (`pixel`, `pixel-gui`), split `[gui]`/`[windows]`/`[dev]`
+     optional-dependency groups mirroring `requirements.txt`/`requirements-gui.txt`. **Actually built and
+     verified**: `python -m build --wheel`, installed the resulting wheel, confirmed both `pixel` and
+     `pixel-gui` commands exist on PATH and `pixel` (no args) prints the expected usage message — not
+     just written and assumed correct.
+  2. **`src/main.py`**: added `cli_main()`, a zero-argument wrapper around the existing `main(instruction)`
+     reading `sys.argv` itself, since `console_scripts` entry points are invoked with no arguments.
+     `python -m src.main "..."` continues to work identically.
+  3. **First-run setup wizard**, closing a real gap: `src/gui/app.py` previously called `config.load()`
+     BEFORE `QApplication` was even constructed, so a fresh install with no `.env` crashed with a raw
+     `RuntimeError` traceback before any window appeared — directly contradicting Phase 11's own success
+     criterion. Split into `setup_wizard_logic.py` (pure functions: `needs_setup()`,
+     `looks_like_a_real_api_key()`, `build_env_contents()`, `write_env_file()` — zero Qt import, testable
+     without a display) and `widgets/setup_wizard.py` (the actual `QDialog`, UI plumbing only — same
+     separation-of-concerns pattern this project already uses for `GateBridge`/`prompt_fn`). Collects the
+     Gemini API key (validated with a cheap sanity check, not a real network call — that's what
+     `src/doctor.py --live` is for), an optional Chrome profile/profiles-dir, and requires an explicit
+     consent checkbox describing what Pixel can actually do (mouse/keyboard/browser control, confirmation
+     gate for risky actions) before "Get Started" enables — the "permissions explanation" Phase 11 calls
+     for. `app.py` now checks `needs_setup()` first and shows the wizard, retrying `config.load()` (now
+     passed the exact `env_path` explicitly rather than relying on `load_dotenv()`'s implicit cwd-search,
+     itself a small correctness fix found while writing a test for this) only after it completes; a
+     cancelled wizard exits cleanly instead of falling through to the same unhelpful crash.
+  4. **`installer/pixel-agent.iss`** (new): a complete Inno Setup script — per-user install
+     (`PrivilegesRequired=lowest`, consistent with DPAPI's per-user design from Phase 8), optional
+     Tesseract/Chromium components, and a `[Code]` section that pre-seeds `TESSERACT_CMD` in a fresh
+     `.env` if the Tesseract component was installed. **Cannot be compiled or tested in this Linux build
+     environment** — `ISCC.exe` is a real Windows binary. Written correctly per Inno Setup's documented
+     directive syntax, explicitly flagged as unverified rather than claimed working.
+  5. **`docs/RELEASE.md`** (new): the actual build/sign/release process, with an honest verified/
+     unverified table at the bottom rather than a single blanket claim — `pyproject.toml`'s build is
+     genuinely verified; every Windows-only step (PyInstaller bundling, Inno Setup compilation, code
+     signing, the manual smoke test) is explicitly marked unverified with why.
+- **Why:** Implements `docs/PHASES.md`'s Phase 11 file table directly. The capability unlock matters beyond
+  this phase specifically — every future GUI-touching change in this project can now get real test
+  coverage in this build environment instead of a documented "unverified" caveat by default.
+- **Impacts:** 333 → 395 tests passing when run WITH GUI tests included (non-GUI count: 333 → 347, +14 for
+  `test_setup_wizard_logic.py`; GUI count: 37 → 48, +8 `test_setup_wizard.py` + 3 `test_app.py`). Not yet
+  verified: nothing in `installer/`/`docs/RELEASE.md`'s Windows-only steps has been run on a real Windows
+  machine — the user should follow `docs/RELEASE.md` end-to-end there before treating any installer build
+  as a real, working release. Code signing remains entirely unset up (no certificate exists).
+
+### [2026-08-02] Phase 12 — Docker deployment, browser-only mode
+- **Type:** New (multiple) + Overwrite (multiple)
+- **File(s) affected:** `src/config.py`, `src/main.py`, `src/gui/worker.py`, `Dockerfile` (new),
+  `docker-compose.yml` (new), `.dockerignore` (new), `docs/DOCKER.md` (new), `tests/test_config.py`,
+  `tests/test_main.py`.
+- **What changed:**
+  1. **New `EXECUTION_MODE` config value** (`"full_desktop"` default, unchanged prior behavior, or
+     `"browser_only"`), validated the same way `RISK_MODEL_BACKEND` already is. `main.py`'s
+     `_build_desktop_backends()` now checks this FIRST: when `browser_only`, it skips even attempting to
+     construct `MouseKeyboard` (never calls it at all — verified with a test asserting the mock was never
+     called, not just that the result was `None`), printing a clear, distinct startup message rather than
+     the generic "desktop control unavailable" warning that would otherwise look like an unexpected
+     runtime failure worth investigating. Ported the identical wiring into `src/gui/worker.py` in the same
+     pass this time, per the earlier CLI/GUI-parity lesson from Phase 7/8 (`TESSERACT_CMD`/
+     `AUTO_APPROVE_EXTERNAL` were fixed in `main.py` first and only found missing in `worker.py` later —
+     not repeating that miss here).
+  2. **`Dockerfile`** (new): Python 3.12-slim base, real Tesseract binary installed via apt, Playwright's
+     Chromium via `playwright install --with-deps chromium` (no `pyautogui`/desktop dependencies at all,
+     since this image is `EXECUTION_MODE=browser_only` by design). **Not built in this environment** — no
+     `docker` binary is available here, confirmed by `which docker` returning nothing. Written correctly
+     per Docker's documented syntax and this project's actual `requirements.txt`, not compiled or run.
+  3. **`docker-compose.yml`** (new): `GEMINI_API_KEY` required with no default (compose refuses to start
+     without it, per Docker's `${VAR:?message}` syntax), `AUTO_APPROVE_EXTERNAL=true` by default since
+     there's no interactive terminal inside a detached container to answer a confirmation prompt —
+     explicitly documented that Destructive-risk steps are still unaffected regardless, same
+     non-negotiable guarantee as everywhere else this flag is used. Two named volumes
+     (`pixel_logs`/`pixel_profiles`) for cross-restart persistence, per Phase 12's own success criterion.
+     Default `command: ["open example.com"]` — a deliberately simple, side-effect-free smoke-test task, so
+     a fresh `docker compose up` alone demonstrates real end-to-end success (the literal wording of Phase
+     12's success criterion) without requiring the person to already know the CLI's argv syntax just to
+     see it work once; real usage overrides via `docker compose run --rm pixel-agent "..."`.
+  4. **`docs/DOCKER.md`** (new): states the browser-only limitation in its very first section, before
+     anything else — matching this project's established pattern (`docs/RELEASE.md`'s verified/unverified
+     table, `installer/pixel-agent.iss`'s header comment) of being upfront about what's real versus
+     written-but-unconfirmed. Includes a concrete 4-step smoke-test checklist to actually run once Docker
+     is available, including a step that specifically confirms `EXECUTION_MODE=browser_only` is enforced
+     inside the running container (not just validated by the test suite in isolation) by deliberately
+     sending it a desktop-targeting instruction and confirming a clear, immediate error rather than a
+     confusing display-related crash.
+- **Why:** Implements `docs/PHASES.md`'s Phase 12 file table and success criterion directly. The
+  `EXECUTION_MODE` config addition is genuinely useful independent of Docker too — it's a real, tested,
+  explicit way to declare "no desktop control here" for any environment, not just this specific
+  containerized one.
+- **Impacts:** 347 → 354 non-GUI tests passing (+7: 4 `test_config.py` for `EXECUTION_MODE` default/
+  valid/case-insensitive/invalid-rejection, 3 `test_main.py` proving `_build_desktop_backends()` never
+  calls `MouseKeyboard` at all in `browser_only` mode, does attempt it in `full_desktop` mode, and still
+  degrades gracefully on a genuine construction failure). GUI suite unaffected (still 48). Not yet
+  verified: the `Dockerfile`/`docker-compose.yml` themselves have not been built or run anywhere — the
+  user should follow `docs/DOCKER.md`'s smoke-test checklist on a machine with Docker installed before
+  treating this deployment path as real. Phase 13 (nested-Windows-VM Docker, for real desktop automation)
+  remains unbuilt, unchanged by this phase.
+
+### [2026-08-06] First real Windows installer build attempt — two real bugs found and fixed
+- **Type:** Overwrite (multiple)
+- **File(s) affected:** `installer/pixel-agent.iss`, `docs/RELEASE.md`.
+- **What changed:** The user followed `docs/RELEASE.md` end-to-end on their real Windows machine for the
+  first time — PyInstaller's build (step 2) succeeded and produced a working `dist\pixel-agent\` folder,
+  but two real bugs surfaced in the steps after that, previously only ever written and never actually
+  attempted:
+  1. **`pixel-agent.iss`'s `[Files]` Source paths were all silently wrong.** Compiling failed with `No
+     files found matching ...\installer\dist\pixel-agent\*`. Root cause: Inno Setup resolves every
+     relative `Source` path in `[Files]` against the `.iss` script's OWN directory (`installer\`) by
+     default, not the directory `ISCC.exe` was invoked from — every path in the script (`dist\
+     pixel-agent\*`, `installer\staging\...`, `.env.example`, `README.md`) had been written assuming
+     project-root-relative resolution, which was simply incorrect. Fixed by adding `SourceDir=..` to
+     `[Setup]`, which redirects all of them to resolve against the project root instead — the one clean
+     fix that makes every existing path correct as originally written, rather than rewriting each Source
+     line individually. Also fixed `OutputDir`, which is NOT affected by `SourceDir` (Inno Setup keeps it
+     script-relative regardless) — set explicitly to `..\dist\installer` so the compiled installer lands
+     where `docs/RELEASE.md` actually documents it landing.
+  2. **`Copy-Item -Recurse` with a wildcard source (`"source\*"`) failed partway through staging both
+     Tesseract and Chromium**, with `Container cannot be copied onto existing leaf item` — a known
+     PowerShell quirk with this exact pattern on nested directory trees, not something specific to this
+     project. `docs/RELEASE.md`'s staging instructions (step 3) now recommend `robocopy` instead, which
+     doesn't have this problem and is the standard Windows tool for recursive directory copies; also noted
+     that `robocopy`'s exit codes are not the usual 0-success convention (0-7 all mean success).
+- **Why:** This is exactly the value of `docs/RELEASE.md`'s own honest verified/unverified table from
+  Phase 11 — every Windows-only step was explicitly flagged as unconfirmed until actually run, and running
+  it for the first time immediately found two real, previously-invisible bugs, the same discipline this
+  project has followed since Phase 7's first live runs.
+- **Impacts:** No test suite changes (both fixes are in a `.iss` script and a markdown doc, neither
+  exercised by the Python test suite). `docs/RELEASE.md`'s verified/unverified table updated to
+  **[PARTIALLY VERIFIED]** for the Inno Setup compile step, rather than the previous blanket "not
+  compiled" — the fix has been written but not yet re-confirmed with another build attempt. The user
+  should re-run `robocopy` for both staging directories and re-attempt `ISCC.exe installer\pixel-agent.iss`
+  to confirm the `SourceDir=..` fix actually resolves the compile failure before this can be marked fully
+  verified.

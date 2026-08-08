@@ -1,0 +1,4 @@
+2026/08/02-14:17:54.334 5848 Reusing MANIFEST D:\Users\yash\downloads\pixel-agent\profiles\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/02-14:17:55.944 5848 Recovering log #3
+2026/08/02-14:17:56.047 5848 Level-0 table #3: started
+2026/08/02-14:17:56.049 5848 Level-0 table #3: 0 bytes IO error: D:\Users\yash\downloads\pixel-agent\profiles\Default\Local Storage\leveldb/000003.ldb: Unable to create writable file (ChromeMethodBFE: 9::NewWritableFile::16)

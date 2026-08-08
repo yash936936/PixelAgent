@@ -1,0 +1,58 @@
+[project]
+name = "pixel-agent"
+version = "0.11.0"
+description = "PixelAgent — a Windows desktop automation agent that carries out plain-English instructions by reading the screen, controlling the browser, and driving the mouse/keyboard, with a human-in-the-loop confirmation gate for anything risky."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Yash Malik" }]
+
+# Fix for a gap flagged in Phase 11 review: requirements.txt is a flat, loose
+# pip-install list with no packaging metadata at all -- `pip install .` does
+# not work from this repo today, which is a real blocker for building any
+# kind of installable distribution (Phase 11's Windows installer needs a
+# real package to bundle, not a bare source checkout + a requirements file).
+# Versions below are mirrored from requirements.txt/requirements-gui.txt,
+# which document exactly which of these have actually been installed and
+# tested in this project's build environment -- see those files' own
+# headers before bumping anything here.
+dependencies = [
+    "google-genai==2.11.0",
+    "playwright==1.56.0",
+    "python-dotenv==1.2.2",
+    "pydantic==2.13.4",
+    "pytesseract==0.3.13",
+    "pillow==12.1.1",
+    # pyautogui requires a real display/X server -- could not be installed
+    # or exercised in this project's sandboxed Linux build environment (see
+    # requirements.txt). Verify on your target Windows machine.
+    "pyautogui==0.9.54",
+]
+
+[project.optional-dependencies]
+# Only needed to run the GUI (`pixel-gui` / python -m src.gui.app). The CLI
+# has no Qt dependency at all. Split out the same way requirements-gui.txt
+# already is, for the same reason: most automated/headless installs never
+# need Qt pulled in at all.
+gui = ["PySide6==6.11.1"]
+# Windows-only, for src/security/at_rest.py's DPAPI encryption-at-rest
+# (docs/DECISIONS.md 2026-08-02, Phase 8). Not installable in this
+# project's Linux build environment -- see src/security/at_rest.py's own
+# graceful-degradation behavior when this isn't present.
+windows = ["pywin32==308"]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+# Fix for a gap flagged in Phase 11 review: there was no installed console
+# command at all -- every invocation required `python -m src.main "..."`
+# from inside a source checkout with the right cwd. This is what
+# installer/ actually puts on PATH after a real install.
+pixel = "src.main:cli_main"
+pixel-gui = "src.gui.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

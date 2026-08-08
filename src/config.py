@@ -97,6 +97,18 @@ class Config:
     # not the default. <= 0 disables pruning entirely.
     log_retention_days: int = 14
 
+    # Deployment mode (2026-08-02, Phase 12, docs/DECISIONS.md): "full_desktop"
+    # (default, unchanged behavior) attempts real OS-level mouse/keyboard
+    # control and degrades gracefully with a warning if unavailable.
+    # "browser_only" is an explicit, declared choice -- used by the Docker
+    # image (Dockerfile/docker-compose.yml), where desktop control is not
+    # just accidentally missing a display, it's structurally impossible
+    # inside a headless Linux container. Skips even attempting to construct
+    # MouseKeyboard, giving a clearer startup message than the generic
+    # "unavailable" warning, and every target_type="desktop" step fails
+    # immediately and explicitly rather than mid-task.
+    execution_mode: str = "full_desktop"
+
     def ensure_dirs(self) -> None:
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +125,7 @@ def load(env_path: str | None = None) -> Config:
       LOCAL_RISK_MODEL_ENDPOINT, DEFAULT_CHROME_PROFILE,
       PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
       TESSERACT_CMD, AUTO_APPROVE_EXTERNAL, RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_MAX_BACKOFF_SECONDS,
-      LOG_RETENTION_DAYS
+      LOG_RETENTION_DAYS, EXECUTION_MODE
     """
     load_dotenv(env_path)
 
@@ -141,6 +153,16 @@ def load(env_path: str | None = None) -> Config:
             "and no eval gate (see risk_model_backend.py's SemanticRiskJudge docstring)."
         )
 
+    execution_mode = os.environ.get("EXECUTION_MODE", "full_desktop").strip().lower()
+    if execution_mode not in ("full_desktop", "browser_only"):
+        raise RuntimeError(
+            f"EXECUTION_MODE must be 'full_desktop' or 'browser_only', got {execution_mode!r}. "
+            "'full_desktop' (the default) is unchanged prior behavior. 'browser_only' is for "
+            "the Docker deployment (Phase 12, docs/DECISIONS.md) -- an explicit, declared choice "
+            "for environments (e.g. a headless Linux container) where real OS-level desktop "
+            "control is structurally impossible, not just accidentally unavailable."
+        )
+
     cfg = Config(
         gemini_api_key=api_key,
         llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-flash"),
@@ -163,6 +185,7 @@ def load(env_path: str | None = None) -> Config:
             else float(os.environ.get("RATE_LIMIT_MAX_BACKOFF_SECONDS", "20"))
         ),
         log_retention_days=int(os.environ.get("LOG_RETENTION_DAYS", "14")),
+        execution_mode=execution_mode,
     )
     cfg.ensure_dirs()
     return cfg
