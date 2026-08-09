@@ -1,0 +1,122 @@
+name: Release
+
+# Triggered on a version tag push (e.g. `git tag v0.12.0 && git push --tags`).
+# NOT VERIFIED end-to-end -- the Windows installer build step in particular needs
+# ISCC.exe (Windows-only) and has only ever been run manually by the user so far
+# (docs/DECISIONS.md, 2026-08-08). This workflow automates that same manual sequence
+# on a `windows-latest` GitHub-hosted runner, which SHOULD have Inno Setup
+# pre-installed per GitHub's own documented tool cache -- confirm this before trusting
+# the workflow, since GitHub's pre-installed tool versions do change over time and
+# this hasn't been checked against a real run.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-windows-installer:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          pip install .[gui,windows]
+          pip install pyinstaller
+
+      # --name pixel-gui is REQUIRED -- must match pyproject.toml's real console
+      # entry point and installer/pixel-agent.iss's MyAppExeName. A mismatch here
+      # produces a build that compiles clean but has a broken Start Menu shortcut --
+      # exactly the bug found and fixed manually on 2026-08-08. This workflow step
+      # exists specifically so that mistake can't recur silently in an automated
+      # release.
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --name pixel-gui --windowed --onedir --noconfirm `
+            --add-data "docs/design-tokens;docs/design-tokens" `
+            src/gui/app.py
+
+      # NOTE: this step does NOT stage Tesseract or Chromium -- doing so automatically
+      # would mean either downloading and redistributing separately-licensed
+      # third-party binaries from CI without a human explicitly reviewing that
+      # decision (docs/RELEASE.md flags this as a real licensing question, not just a
+      # technical one), or committing large binaries into this repo. Left as a manual
+      # pre-release step for now; a real solution (e.g. a separate, human-triggered
+      # "stage third-party binaries" job with explicit license acknowledgment) is a
+      # good candidate for a future refinement of this workflow, not attempted here.
+      - name: Compile installer with Inno Setup
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\pixel-agent.iss
+        shell: pwsh
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-agent-windows-installer
+          path: dist/installer/PixelAgent-Setup-*.exe
+          if-no-files-found: error
+
+  build-docker-images:
+    name: Build Docker images (browser-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build browser-only image
+        run: docker build -t pixel-agent:${{ github.ref_name }} .
+
+      # A real smoke test, not just "did it build" -- runs the same simple,
+      # side-effect-free task docker-compose.yml's own default command uses
+      # (docs/DECISIONS.md, Phase 12), and checks for a clean exit rather than
+      # trusting a successful `docker build` alone. NOT verified against a real run --
+      # no `docker` binary was available in the environment that wrote this workflow.
+      - name: Smoke-test the image
+        run: |
+          docker run --rm \
+            -e GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY_CI_SMOKETEST }}" \
+            pixel-agent:${{ github.ref_name }} "open example.com"
+
+  create-release:
+    name: Create GitHub release
+    needs: [build-windows-installer, build-docker-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pixel-agent-windows-installer
+          path: ./release-assets
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-assets/*
+          generate_release_notes: true
+          # Deliberately NOT auto-publishing as "latest" without review -- draft
+          # first, per this project's general pattern of flagging things as
+          # unverified until a human confirms them (docs/RELEASE.md's own
+          # verified/unverified table, applied here to the release process itself).
+          draft: true
+
+  rollback-note:
+    name: (Reminder) Manual rollback procedure
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print rollback instructions
+        run: |
+          echo "This workflow does not implement automated rollback."
+          echo "Per docs/PHASES.md's Phase 14 success criterion ('a bad release can be"
+          echo "rolled back without manual intervention'), automated rollback is NOT"
+          echo "yet implemented -- see docs/RELEASE_ENGINEERING.md's 'Known gap' section."
+          echo "For now: delete the bad GitHub release + tag, and re-tag the last-known-"
+          echo "good commit to trigger a fresh release build."

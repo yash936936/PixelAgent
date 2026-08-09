@@ -1,60 +1,46 @@
-# What's in this zip
+# Phase 14 — what's in this zip
 
-Fixes and documentation from tonight's first real Windows installer build-and-run cycle,
-now with all four project docs (`RELEASE.md`, `DECISIONS.md`, `STATUS.md`, `PHASES.md`)
-updated to match, per this project's own convention of keeping those in sync.
+Phase 13 was not merged into your repo (it was only ever a standalone review package
+from the last exchange), so there's nothing to literally "revert" on your machine —
+just don't apply that earlier zip. This package instead marks Phase 13 on-hold in your
+docs and adds Phase 14's real files.
 
-## Files, and what to do with each
+## Files
 
-1. **`installer/pixel-agent.iss`** — drop-in replacement for your real
-   `installer/pixel-agent.iss`. Contains the 2026-08-06 fixes (`SourceDir`,
-   `OutputDir`) plus tonight's fix: the `[Code]` section now writes
-   `PLAYWRIGHT_BROWSERS_PATH` into the generated `.env` when the `chromium` component is
-   installed, so a fresh install's bundled Playwright actually finds the staged
-   Chromium binary instead of crashing on the first browser task.
+1. **`.github/workflows/test.yml`** — new. Runs non-GUI, integration, and GUI test
+   suites plus both eval harnesses on every push/PR.
+2. **`.github/workflows/release.yml`** — new. Builds the Windows installer + Docker
+   image on a version-tag push, publishes a **draft** GitHub release.
+3. **`.github/workflows/scripts/check_eval_regression.py`** — new. Small helper the
+   test workflow uses to catch an eval-score regression; its output-parsing regex is
+   flagged unverified in its own docstring — check against the real eval script's
+   print format before trusting it blindly.
+4. **`CHANGELOG.md`** — new. User-facing release notes, separate from `DECISIONS.md`.
+5. **`docs/RELEASE_ENGINEERING.md`** — new. Honest status of Phase 14: what's genuinely
+   uncertain (Inno Setup on the GitHub runner, un-automated Tesseract/Chromium staging,
+   a secret that doesn't exist yet), and the one success-criterion sub-item
+   (automated rollback) that's explicitly NOT met.
+6. **`docs/PHASES_Phase13_onhold_block.md`** — **not a drop-in file.** Replace Phase
+   13's status line in your real `docs/PHASES.md` with this block. Plan/file table
+   underneath stays as-is — only the status changed.
+7. **`docs/DECISIONS_new_entry_phase14.md`** — append to the END of your real
+   `docs/DECISIONS.md` (chronological, oldest-first, same convention as last time).
 
-2. **`docs/RELEASE.md`** — drop-in replacement for your real `docs/RELEASE.md`. Updated
-   verified/unverified table (most rows now genuinely `[VERIFIED]`, confirmed live
-   tonight), plus a full "Known issues found on first real build" section documenting
-   all five bugs and fixes.
+## Before this actually does anything
 
-3. **`docs/STATUS.md`** — drop-in replacement for your real `docs/STATUS.md`. This is
-   the FULL file, not a snippet — I had complete content for it from this conversation,
-   so it's safe to overwrite directly. Updated: Phase 11's installer status, the new
-   `llm_model` gap flagged in both the source-file table and Known Gaps section, and a
-   new dated update at the bottom (older dated updates preserved, per the file's own
-   append convention).
+Two setup steps needed on GitHub's side, not just files in your repo:
 
-4. **`docs/PHASES_md_Phase11_replacement_block.md`** — **not a drop-in file.** Your real
-   `PHASES.md` has 18 phases and I only need to change one of them — regenerating the
-   whole file risked introducing a subtle diff in a section I don't need to touch. Open
-   your real `docs/PHASES.md`, find the `## Phase 11 — Packaging & distribution` section,
-   and replace just that block with this file's content.
+1. **Create a `GEMINI_API_KEY_CI_SMOKETEST` secret** in your repo's Settings → Secrets
+   and variables → Actions. Use a dedicated key, not your personal one — ideally one
+   with tight usage limits, given tonight's earlier git-history key leak. Don't reuse
+   whatever key you rotate to for your own local development.
+2. **Confirm Inno Setup is actually present on `windows-latest`** the first time
+   `release.yml` runs — `docs/RELEASE_ENGINEERING.md` flags this as unverified. If the
+   compile step fails looking for `ISCC.exe`, that's why; the workflow needs an
+   explicit install step added.
 
-5. **`docs/DECISIONS_new_entry.md`** — **not a drop-in file, and the ordering note in an
-   earlier version of this README was wrong.** Your real `DECISIONS.md` is chronological
-   **oldest-first** (2026-07-09 at the top, 2026-08-06 at the bottom) — so this entry goes
-   at the very **END** of the file, right after the existing 2026-08-06 entry, not at the
-   top. See `docs/DECISIONS_APPEND_NOTE.md` for the same correction in one place.
+## Suggested next step
 
-6. **`docs/DECISIONS_APPEND_NOTE.md`** — short correction note, see above.
-
-7. **`PATCH_config_and_env_example.md`** — two one-line manual edits for
-   `src/config.py` and `.env.example`, fixing the dead `gemini-2.5-flash` default at
-   the source. Not regenerated as full files since I only ever saw grep'd lines from
-   each, not their complete contents.
-
-## Suggested order of operations
-
-1. Copy `installer/pixel-agent.iss`, `docs/RELEASE.md`, and `docs/STATUS.md` into your
-   real project, overwriting the existing copies.
-2. Open your real `docs/PHASES.md` and replace its Phase 11 section with
-   `docs/PHASES_md_Phase11_replacement_block.md`'s content.
-3. Append `docs/DECISIONS_new_entry.md`'s content to the END of your real
-   `docs/DECISIONS.md`.
-4. Apply the two one-line edits from `PATCH_config_and_env_example.md`.
-5. Rebuild: `pyinstaller --name pixel-gui ...` → `robocopy` staging →
-   `ISCC.exe installer\pixel-agent.iss`.
-6. Fresh install, confirm a browser task works with zero manual `.env` patching this
-   time — the real proof tonight's fix is baked into the build, not just patched on one
-   machine.
+Apply the files, push to `main`, and watch `test.yml` actually run for the first time
+— that's the real verification this workflow needs, the same way `docs/RELEASE.md`
+only became trustworthy once someone actually ran it end-to-end on 2026-08-08.

@@ -1,0 +1,102 @@
+name: Test
+
+# Runs on every push and PR — the first automated test run in this project's history.
+# Every prior test run (395 tests as of Phase 11/12, per docs/STATUS.md) has been
+# manual, per docs/PHASES.md's own Phase 14 framing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  non-gui-tests:
+    name: Non-GUI test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run non-GUI test suite
+        run: pytest --ignore=tests/gui --ignore=tests/integration -v
+
+      # tests/integration/ needs a real Tesseract binary + Playwright's Chromium —
+      # kept as a separate, explicit step (not folded into the main run above) so a
+      # missing optional dependency shows as a distinct, readable failure rather than
+      # silently skipping or crashing the whole job.
+      - name: Install Tesseract + Playwright Chromium for integration tests
+        run: |
+          sudo apt-get update && sudo apt-get install -y tesseract-ocr
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run integration test suite
+        run: pytest tests/integration/ -v
+
+  gui-tests:
+    name: GUI test suite (offscreen Qt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-gui.txt
+          pip install pytest
+
+      # PySide6 needs a virtual display even in "offscreen" mode for some Qt
+      # subsystems — xvfb-run is the standard CI pattern for this. QT_QPA_PLATFORM
+      # is set per the exact invocation docs/DECISIONS.md's Phase 11 entry already
+      # confirmed works in a Linux environment (verified live, not assumed here).
+      - name: Run GUI test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: xvfb-run -a pytest tests/gui/ -v
+
+  adversarial-eval:
+    name: Adversarial boundary eval (regression gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Runs the semantic-layer eval (73% overall per docs/STATUS.md's Track B
+      # section) as a REGRESSION gate, not a pass/fail deployment gate — the real
+      # deployment gate (eval/README.md's ≥0.95/≥0.90 thresholds) only applies to a
+      # trained RISK_MODEL_BACKEND=local model, which doesn't exist yet per Phase 10's
+      # honest zero result. This job fails the build only if the semantic-layer score
+      # regresses below its own last-known baseline, not against the higher bar meant
+      # for a future trained model.
+      - name: Run adversarial boundary eval (semantic layer)
+        run: |
+          python -m eval.adversarial_boundary_eval --model semantic | tee eval_output.txt
+          python .github/workflows/scripts/check_eval_regression.py eval_output.txt --min-overall 70
+
+      - name: Run injection-signal eval
+        run: python -m eval.injection_signal_eval
