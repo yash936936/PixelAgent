@@ -87,6 +87,8 @@ jobs:
     name: Create GitHub release
     needs: [build-windows-installer, build-docker-images]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
