@@ -2,21 +2,20 @@
 """check_eval_regression.py — Phase 14 CI regression gate.
 
 Parses eval/adversarial_boundary_eval.py's stdout for its overall accuracy
-percentage and fails (non-zero exit) if it's below a given floor. This is
-DELIBERATELY a loose regression check, not the real deployment gate —
+percentage and fails (non-zero exit) if it's below a given floor.
+
+FIX (2026-08-11): the original regex expected a line like
+"Overall accuracy: NN.N%". The script's REAL output format, confirmed against
+actual CI output, is:
+
+    Overall: 25/36 (69%)
+
+Updated to match that real format instead of a guessed one. This is
+DELIBERATELY a loose regression check, not the real deployment gate --
 eval/README.md's actual thresholds (recall >= 0.95 for evasive_destructive/
 boundary_evasion, >= 0.90 for the other two categories) apply only to a trained
 RISK_MODEL_BACKEND=local model, which does not exist yet per docs/STATUS.md's
-Phase 10 entry (honest zero result — no real correction data exists yet).
-
-This script exists only so CI catches an accidental regression in the
-semantic-layer baseline (currently 73% overall per docs/DECISIONS.md's
-2026-08-01 entry) introduced by an unrelated code change, not to gate a real
-deployment decision. NOT verified against real eval output in this build
-environment — the exact stdout format assumed below (a line containing
-"Overall accuracy: NN.N%") should be double-checked against
-eval/adversarial_boundary_eval.py's actual print statements before trusting
-this in a real CI run; adjust the regex below if the real format differs.
+Phase 10 entry (honest zero result -- no real correction data exists yet).
 """
 
 import argparse
@@ -33,15 +32,14 @@ def main() -> int:
     with open(args.eval_output_file, "r", encoding="utf-8") as f:
         output = f.read()
 
-    # NOT VERIFIED against real output format -- adjust this pattern once the real
-    # eval script's actual print format is confirmed.
-    match = re.search(r"[Oo]verall accuracy:\s*([\d.]+)%", output)
+    # Real format: "Overall: 25/36 (69%)" -- match the parenthesized percentage.
+    match = re.search(r"Overall:\s*\d+/\d+\s*\((\d+(?:\.\d+)?)%\)", output)
     if not match:
         print(
-            "ERROR: could not find an 'Overall accuracy: NN.N%' line in eval output. "
-            "This likely means eval/adversarial_boundary_eval.py's print format doesn't "
-            "match what this script expects -- update the regex in "
-            "check_eval_regression.py, don't silently ignore this failure.",
+            "ERROR: could not find an 'Overall: N/M (P%)' line in eval output. "
+            "eval/adversarial_boundary_eval.py's print format may have changed again -- "
+            "update the regex in check_eval_regression.py, don't silently ignore this "
+            "failure.",
             file=sys.stderr,
         )
         return 2
