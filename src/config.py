@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 class Config:
     # LLM
     gemini_api_key: str
-    llm_model: str = "gemini-2.5-flash"
+    llm_model: str = "gemini-3.5-flash-lite"
 
     # Phase 4 (optional): swap-in a cheaper local/fine-tuned planning model
     # for routine steps instead of the hosted Gemini API. Never replaces the
@@ -165,7 +165,7 @@ def load(env_path: str | None = None) -> Config:
 
     cfg = Config(
         gemini_api_key=api_key,
-        llm_model=os.environ.get("LLM_MODEL", "gemini-2.5-flash"),
+        llm_model=os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite"),
         planner_backend=planner_backend,
         local_planner_endpoint=os.environ.get("LOCAL_PLANNER_ENDPOINT"),
         risk_model_backend=risk_model_backend,

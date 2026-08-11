@@ -120,7 +120,7 @@ def test_hosted_planner_records_real_cost_from_usage_metadata(monkeypatch):
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     planner.next_step("do it", {}, [])
 
     expected = estimate_cost_usd(1000, 200)
@@ -143,7 +143,7 @@ def test_hosted_planner_cost_zero_when_no_usage_metadata(monkeypatch):
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     planner.next_step("do it", {}, [])
     assert planner.last_call_cost == 0.0
 
@@ -176,7 +176,7 @@ def test_hosted_planner_retries_once_on_truncated_json_then_succeeds(monkeypatch
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     step = planner.next_step("do it", {}, [])
     assert step["action"] == "navigate"
     assert fake_models.call_count == 2
@@ -234,7 +234,7 @@ def test_hosted_planner_retries_after_rate_limit_then_succeeds(monkeypatch):
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     step = planner.next_step("do it", {}, [])
     assert step["action"] == "navigate"
     assert call_count["n"] == 2
@@ -260,7 +260,7 @@ def test_hosted_planner_raises_after_exhausting_rate_limit_retries(monkeypatch):
 
     from google.genai import errors as genai_errors
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     with pytest.raises(genai_errors.ClientError):
         planner.next_step("do it", {}, [])
     assert call_count["n"] == 2  # default rate_limit_max_attempts, no more no less
@@ -292,7 +292,7 @@ def test_hosted_planner_rate_limit_attempts_is_configurable_to_fail_fast(monkeyp
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash", rate_limit_max_attempts=1)
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite", rate_limit_max_attempts=1)
     with pytest.raises(genai_errors.ClientError):
         planner.next_step("do it", {}, [])
     assert call_count["n"] == 1  # zero retries -- fails on the very first attempt
@@ -327,7 +327,7 @@ def test_hosted_planner_rate_limit_backoff_is_capped(monkeypatch):
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
     planner = HostedLLMPlanner(
-        api_key="fake", model="gemini-2.5-flash", rate_limit_max_backoff_seconds=10.0
+        api_key="fake", model="gemini-3.5-flash-lite", rate_limit_max_backoff_seconds=10.0
     )
     planner.next_step("do it", {}, [])
     assert slept_for == [10.0]  # capped at 10s, not the server's suggested 45s
@@ -337,7 +337,7 @@ def test_hosted_planner_defaults_are_faster_failing_than_original(monkeypatch):
     """Pins the new, safer defaults directly -- regression protection
     against silently reverting to the original 3-attempt/uncapped
     behavior that caused the 10+ minute live-run wait."""
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     assert planner._rate_limit_max_attempts == 2
     assert planner._rate_limit_max_backoff_seconds == 20.0
 
@@ -361,7 +361,7 @@ def test_hosted_planner_does_not_retry_non_rate_limit_api_errors(monkeypatch):
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     with pytest.raises(genai_errors.ClientError):
         planner.next_step("do it", {}, [])
     assert call_count["n"] == 1  # no retry at all for a non-429 error
@@ -382,6 +382,6 @@ def test_hosted_planner_generate_fn_reusable_for_risk_judge(monkeypatch):
 
     monkeypatch.setattr("src.brain.planner.genai.Client", FakeClient)
 
-    planner = HostedLLMPlanner(api_key="fake", model="gemini-2.5-flash")
+    planner = HostedLLMPlanner(api_key="fake", model="gemini-3.5-flash-lite")
     raw = planner._generate_fn("system prompt", "user content")
     assert json.loads(raw)["risk"] == "destructive"
