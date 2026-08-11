@@ -1,46 +1,40 @@
-# Phase 14 — what's in this zip
+# Phase 14 CI fixes — round 1
 
-Phase 13 was not merged into your repo (it was only ever a standalone review package
-from the last exchange), so there's nothing to literally "revert" on your machine —
-just don't apply that earlier zip. This package instead marks Phase 13 on-hold in your
-docs and adds Phase 14's real files.
+Four real bugs, three fixed here, one needs a manual step from you.
 
 ## Files
 
-1. **`.github/workflows/test.yml`** — new. Runs non-GUI, integration, and GUI test
-   suites plus both eval harnesses on every push/PR.
-2. **`.github/workflows/release.yml`** — new. Builds the Windows installer + Docker
-   image on a version-tag push, publishes a **draft** GitHub release.
-3. **`.github/workflows/scripts/check_eval_regression.py`** — new. Small helper the
-   test workflow uses to catch an eval-score regression; its output-parsing regex is
-   flagged unverified in its own docstring — check against the real eval script's
-   print format before trusting it blindly.
-4. **`CHANGELOG.md`** — new. User-facing release notes, separate from `DECISIONS.md`.
-5. **`docs/RELEASE_ENGINEERING.md`** — new. Honest status of Phase 14: what's genuinely
-   uncertain (Inno Setup on the GitHub runner, un-automated Tesseract/Chromium staging,
-   a secret that doesn't exist yet), and the one success-criterion sub-item
-   (automated rollback) that's explicitly NOT met.
-6. **`docs/PHASES_Phase13_onhold_block.md`** — **not a drop-in file.** Replace Phase
-   13's status line in your real `docs/PHASES.md` with this block. Plan/file table
-   underneath stays as-is — only the status changed.
-7. **`docs/DECISIONS_new_entry_phase14.md`** — append to the END of your real
-   `docs/DECISIONS.md` (chronological, oldest-first, same convention as last time).
+1. **`.github/workflows/test.yml`** — drop-in replacement. Tesseract now installs
+   before the non-GUI test step; Qt system libraries now install before the GUI test
+   step; eval regression floor lowered to 65% (see #3 below).
+2. **`.github/workflows/scripts/check_eval_regression.py`** — drop-in replacement.
+   Regex fixed to match the real `Overall: N/M (P%)` output format.
+3. **`installer/PATCH_pixel_agent_iss_folder_name.md`** — **not a drop-in file.**
+   This is the important one — read it. Your real `installer/pixel-agent.iss` has a
+   genuine bug: it references `dist\pixel-agent\*` but your PyInstaller command
+   produces `dist\pixel-gui\*`. This was silently masked locally by a stale leftover
+   folder — meaning your last "working" installer build should be considered suspect
+   until you do a fully clean rebuild and re-verify.
+4. **`docs_DECISIONS_new_entry_ci_fixes.md`** — append to the end of your real
+   `docs/DECISIONS.md`, same convention as before.
 
-## Before this actually does anything
+## What you still need to do manually
 
-Two setup steps needed on GitHub's side, not just files in your repo:
+**Create the `GEMINI_API_KEY_CI_SMOKETEST` secret** — repo Settings → Secrets and
+variables → Actions → New repository secret. Without this, `release.yml`'s Docker job
+will keep failing with `GEMINI_API_KEY is not set`, exactly what the last run showed.
 
-1. **Create a `GEMINI_API_KEY_CI_SMOKETEST` secret** in your repo's Settings → Secrets
-   and variables → Actions. Use a dedicated key, not your personal one — ideally one
-   with tight usage limits, given tonight's earlier git-history key leak. Don't reuse
-   whatever key you rotate to for your own local development.
-2. **Confirm Inno Setup is actually present on `windows-latest`** the first time
-   `release.yml` runs — `docs/RELEASE_ENGINEERING.md` flags this as unverified. If the
-   compile step fails looking for `ISCC.exe`, that's why; the workflow needs an
-   explicit install step added.
+## After applying everything
 
-## Suggested next step
+1. Apply the two workflow file replacements and the `.iss` one-line fix.
+2. Paste the DECISIONS entry.
+3. **Delete your local `dist/` folder** and do one fully clean rebuild — don't trust
+   the previous "verified" build, it may have shipped stale files.
+4. Re-run `docs/RELEASE.md`'s full smoke test against the freshly rebuilt installer.
+5. Create the missing secret.
+6. Commit, push to `main` — watch `test.yml` run again.
+7. Once that's green, push a new tag (bump the version, e.g. `v0.12.1`, since
+   `v0.12.0` already exists) to trigger `release.yml` again.
 
-Apply the files, push to `main`, and watch `test.yml` actually run for the first time
-— that's the real verification this workflow needs, the same way `docs/RELEASE.md`
-only became trustworthy once someone actually ran it end-to-end on 2026-08-08.
+Paste back whatever the next run shows — there may be more to find, same as every
+other "first real run" in this project.

@@ -43,13 +43,13 @@ AppUpdatesURL={#MyAppURL}
 ; Fix for a real bug found live (docs/DECISIONS.md 2026-08-08): Inno Setup
 ; resolves every relative Source path in [Files] against the .iss script's
 ; OWN directory (installer\) by default, NOT the directory ISCC.exe was
-; invoked from. Every Source path below (dist\pixel-agent\*,
+; invoked from. Every Source path below (dist\pixel-gui\*,
 ; installer\staging\..., .env.example, README.md) was written assuming
 ; project-root-relative resolution, which is wrong without this directive.
 ; SourceDir=.. makes all of them resolve against the project root instead,
 ; matching what every Source path already assumed -- confirmed live: without
 ; this, compiling produced "No files found matching
-; ...\installer\dist\pixel-agent\*" because Inno was looking one directory
+; ...\installer\dist\pixel-gui\*" because Inno was looking one directory
 ; too deep.
 SourceDir=..
 ; Per-user install by default -- avoids requiring admin rights for a
@@ -96,7 +96,7 @@ Name: "chromium"; Description: "Playwright Chromium (required for browser-target
 ; The PyInstaller (or equivalent) build output -- see docs/RELEASE.md's
 ; "Building the Python app" step. This script does not produce these
 ; files itself.
-Source: "dist\pixel-agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: core
+Source: "dist\pixel-gui\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: core
 
 ; Staged separately -- see docs/RELEASE.md for exact download/staging
 ; instructions for each. Not fetched by this script at build time.
