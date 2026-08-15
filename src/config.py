@@ -109,6 +109,31 @@ class Config:
     # immediately and explicitly rather than mid-task.
     execution_mode: str = "full_desktop"
 
+    # Operational safety limits (2026-08-11, Phase 15, docs/DECISIONS.md):
+    # hard ceilings BEYOND max_steps_per_task above -- a task that's
+    # technically making step-by-step progress can still run too long or
+    # cost too much in aggregate, which max_steps_per_task alone doesn't
+    # catch (a task that keeps needing replans, or an unusually verbose
+    # instruction, can rack up many cheap-looking steps that still add up).
+    # All three are independently optional; see
+    # src/observability/operational_limits.py's OperationalLimits docstring
+    # for exactly what each does and doesn't cover (max_wall_clock_seconds
+    # in particular is a COOPERATIVE check, not a preemptive kill -- see
+    # that module's WallClockGuard docstring). None/unset for cost and
+    # wall-clock means "no limit", matching this project's existing
+    # opt-in-only convention for every other safety/behavior tradeoff
+    # (auto_approve_external, log_retention_days, etc. all ship with an
+    # explicit, safe default rather than an implicit one). max_concurrent_tasks
+    # defaults to 1, not unlimited, since this project has never had an
+    # explicit multi-task guard before this phase (see docs/STATUS.md's
+    # standing "no multi-user/concurrency model" known gap) -- 1 preserves
+    # today's real, if previously unenforced, single-task-at-a-time usage
+    # pattern rather than silently opening up concurrent runs no one has
+    # tested against.
+    max_cost_usd: float | None = None
+    max_wall_clock_seconds: float | None = None
+    max_concurrent_tasks: int = 1
+
     def ensure_dirs(self) -> None:
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -125,7 +150,7 @@ def load(env_path: str | None = None) -> Config:
       LOCAL_RISK_MODEL_ENDPOINT, DEFAULT_CHROME_PROFILE,
       PROFILES_DIR, MAX_STEPS_PER_TASK, LOG_DIR, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
       TESSERACT_CMD, AUTO_APPROVE_EXTERNAL, RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_MAX_BACKOFF_SECONDS,
-      LOG_RETENTION_DAYS, EXECUTION_MODE
+      LOG_RETENTION_DAYS, EXECUTION_MODE, MAX_COST_USD, MAX_WALL_CLOCK_SECONDS, MAX_CONCURRENT_TASKS
     """
     load_dotenv(env_path)
 
@@ -163,6 +188,39 @@ def load(env_path: str | None = None) -> Config:
             "control is structurally impossible, not just accidentally unavailable."
         )
 
+    # Phase 15 (2026-08-11): MAX_COST_USD / MAX_WALL_CLOCK_SECONDS parse to
+    # None (no limit) when unset or explicitly "none" -- same pattern
+    # RATE_LIMIT_MAX_BACKOFF_SECONDS already established just above, kept
+    # consistent rather than inventing a second convention for "no limit".
+    def _parse_optional_float(env_name: str) -> float | None:
+        raw = os.environ.get(env_name, "").strip().lower()
+        if raw in ("", "none"):
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            raise RuntimeError(
+                f"{env_name} must be a number or unset/'none' for no limit, got {raw!r}."
+            )
+
+    max_cost_usd = _parse_optional_float("MAX_COST_USD")
+    max_wall_clock_seconds = _parse_optional_float("MAX_WALL_CLOCK_SECONDS")
+
+    max_concurrent_raw = os.environ.get("MAX_CONCURRENT_TASKS", "1").strip()
+    try:
+        max_concurrent_tasks = int(max_concurrent_raw)
+    except ValueError:
+        raise RuntimeError(
+            f"MAX_CONCURRENT_TASKS must be an integer, got {max_concurrent_raw!r}."
+        )
+    if max_concurrent_tasks < 1:
+        raise RuntimeError(
+            f"MAX_CONCURRENT_TASKS must be >= 1, got {max_concurrent_tasks}. "
+            "There is currently no way to express 'unlimited' for this setting -- "
+            "see src/observability/operational_limits.py's TaskConcurrencyGuard if "
+            "that's genuinely needed later."
+        )
+
     cfg = Config(
         gemini_api_key=api_key,
         llm_model=os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite"),
@@ -186,6 +244,9 @@ def load(env_path: str | None = None) -> Config:
         ),
         log_retention_days=int(os.environ.get("LOG_RETENTION_DAYS", "14")),
         execution_mode=execution_mode,
+        max_cost_usd=max_cost_usd,
+        max_wall_clock_seconds=max_wall_clock_seconds,
+        max_concurrent_tasks=max_concurrent_tasks,
     )
     cfg.ensure_dirs()
     return cfg

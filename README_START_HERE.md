@@ -1,44 +1,58 @@
-# Phase 14 closeout + Phase 15 start
+# Phase 15 — real wiring pass
 
-## Phase 14 closeout (docs only, no code)
+Written directly against the real, current contents of your four files —
+not reconstructed from fragments this time, since you pasted them in full.
 
-1. **`docs/DECISIONS_new_entry_phase14_closeout.md`** — append to the end of your
-   real `docs/DECISIONS.md`.
-2. **`docs/RELEASE_ENGINEERING.md`** — drop-in replacement for your real
-   `docs/RELEASE_ENGINEERING.md`. Marks Phase 14 complete for its achievable scope,
-   documents the three still-open items (rollback, Windows-VM Docker variant, the
-   eval-score drift).
+## Files — all four are complete, drop-in replacements
 
-Also worth doing by hand: update `docs/PHASES.md`'s Phase 14 section status line
-to COMPLETE (browser-only/native scope), and `docs/STATUS.md`'s overall progress
-line — I don't have full current copies of either in this conversation to safely
-regenerate, so this is a manual edit, same caveat as usual.
+1. **`src/config.py`** — adds `max_cost_usd`, `max_wall_clock_seconds`,
+   `max_concurrent_tasks`, plus their env-var parsing in `load()`.
+2. **`src/brain/orchestrator.py`** — `run_task()` now acquires a limits
+   session first thing, checks wall-clock at every step boundary (both the
+   fresh-planning and replay loops), checks cost after each step, and
+   catches `OperationalLimitExceeded` with its own distinct status.
+3. **`src/main.py`** — a process-scoped concurrency guard, sized from real
+   config, wired into `Orchestrator`'s constructor.
+4. **`src/gui/worker.py`** — the same wiring, ported in this same pass
+   (not left as a later "found missing" fix, learning from the
+   `TESSERACT_CMD`/`AUTO_APPROVE_EXTERNAL` precedent).
+5. **`src/observability/operational_limits.py`** — unchanged from earlier
+   today, included here again so this zip is self-contained.
 
-## Phase 15 start (real, tested code)
+## Tests
 
-1. **`src/observability/operational_limits.py`** — new file, complete and
-   self-contained. Three guard classes (`CostGuard`, `WallClockGuard`,
-   `TaskConcurrencyGuard`) plus `OperationalLimitExceeded` and a convenience
-   `acquire_task_limits_session()` helper.
-2. **`tests/observability/test_operational_limits.py`** — new, 16 tests, all
-   should pass standalone (no dependency on the rest of the codebase).
-3. **`PATCH_wiring_orchestrator_and_config.md`** — **not code.** Explains exactly
-   what wiring is needed to make this module actually affect live task runs, and
-   why that wiring wasn't attempted blind — it touches `orchestrator.py`,
-   `config.py`, `main.py`, and `worker.py`, all four of which have grown real
-   cross-cutting complexity this session doesn't have full visibility into.
+6. **`tests/observability/test_operational_limits.py`** — unchanged,
+   genuinely re-run in this session, still 19/19 passing.
+7. **`tests/brain/test_orchestrator_operational_limits.py`** — **new, and
+   important: only syntax-checked, not actually run.** `orchestrator.py`
+   imports several sibling modules I've only ever seen as fragments in this
+   conversation, so a real pytest run in my sandbox would fail on missing
+   imports, not reveal anything about whether the wiring itself is correct.
 
-## To actually finish Phase 15
-
-Run the tests to confirm they pass standalone:
+## What you need to do before trusting this
 
 ```bash
-pytest tests/observability/test_operational_limits.py -v
+pytest tests/brain/test_orchestrator_operational_limits.py -v
 ```
 
-Then, when you're ready for the real wiring pass, paste (or share) the current
-full contents of `src/config.py`, `src/brain/orchestrator.py`, `src/main.py`, and
-`src/gui/worker.py` — I'll write the actual edits against your real code rather
-than guessing at how they currently look. Phase 15 isn't complete until that
-wiring happens and a real stress run confirms the limits actually stop a runaway
-task, per `docs/PHASES.md`'s own success criterion.
+Run this for real on your actual checkout. If anything fails, paste the
+output back — I'd rather fix a real failure against real output than have
+you discover a wiring bug mid-task later.
+
+## Docs
+
+8. **`docs/DECISIONS_new_entry_phase15_wiring.md`** — append to the end of
+   your real `docs/DECISIONS.md`.
+
+## After the tests pass
+
+Try an artificially tight limit to confirm the behavior end-to-end, e.g.:
+
+```bash
+MAX_WALL_CLOCK_SECONDS=5 python -m src.main "open example.com and describe the page in detail"
+```
+
+A task that would normally take longer than 5 seconds should now stop with
+`status: operational_limit_exceeded` instead of running to completion —
+that's the real proof this phase's success criterion asks for, beyond just
+tests passing in isolation.

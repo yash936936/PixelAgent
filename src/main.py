@@ -19,7 +19,29 @@ from src.confirmation.gate import ConfirmationGate
 from src.confirmation.prompt_ui import console_prompt
 from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger, prune_old_logs
+from src.observability.operational_limits import OperationalLimits, TaskConcurrencyGuard
 from src.perception.ocr import OCREngine
+
+# Phase 15 (2026-08-11, docs/DECISIONS.md): a SINGLE, process-wide
+# TaskConcurrencyGuard, constructed once at module import time rather than
+# per-task-run inside main(). This matters: if a new guard were constructed
+# on every main() call, the concurrency ceiling would never actually be
+# shared across calls and would be meaningless (every task would see an
+# empty guard and always succeed). Since `python -m src.main "..."` and the
+# `pixel` console command both invoke main()/cli_main() as a fresh process
+# per invocation, this guard is only genuinely process-wide within a single
+# process's lifetime -- e.g. if src.main is ever imported and main() called
+# multiple times within one long-running process (not how the CLI is used
+# today, but how a future test harness or the Phase 13
+# container-orchestration HTTP API might call it). For the ordinary
+# one-process-per-CLI-invocation case, this guard's practical effect today
+# is limited to catching a genuine re-entrant call within that one process
+# -- it is NOT a cross-process lock (two separate `pixel "..."` invocations
+# in two separate terminals are two separate processes with two separate
+# guards, so this does not yet prevent that case; see
+# src/observability/operational_limits.py's TaskConcurrencyGuard docstring
+# for why cross-process locking was explicitly out of scope for this pass).
+_CONCURRENCY_GUARD = TaskConcurrencyGuard(max_concurrent=None)  # sized from real cfg in main() below
 
 
 def _build_risk_model_judge(cfg):
@@ -126,8 +148,34 @@ def _build_planner(cfg):
     )
 
 
+def _build_operational_limits(cfg) -> OperationalLimits:
+    """Phase 15 (2026-08-11, docs/DECISIONS.md): translates cfg's three
+    MAX_COST_USD/MAX_WALL_CLOCK_SECONDS/MAX_CONCURRENT_TASKS fields into the
+    OperationalLimits bundle Orchestrator expects. Kept as its own small
+    function (matching _build_planner/_build_risk_model_judge/
+    _build_desktop_backends's existing pattern) rather than inlined, so
+    src/gui/worker.py can import and reuse it identically instead of
+    re-deriving the same three fields separately -- avoids the exact
+    CLI/GUI-parity miss this project has hit twice before (TESSERACT_CMD,
+    AUTO_APPROVE_EXTERNAL) by construction this time, not as a later
+    follow-up fix."""
+    return OperationalLimits(
+        max_cost_usd=cfg.max_cost_usd,
+        max_wall_clock_seconds=cfg.max_wall_clock_seconds,
+        max_concurrent_tasks=cfg.max_concurrent_tasks,
+    )
+
+
 def main(instruction: str) -> dict:
     cfg = config.load()
+
+    # Phase 15: size the module-level concurrency guard from real config on
+    # first real use. _CONCURRENCY_GUARD.acquire()/.release() still work
+    # correctly even if this races across threads (TaskConcurrencyGuard's
+    # own lock protects _active_count), but max_concurrent itself is set
+    # once here rather than at import time, since cfg isn't available yet
+    # at module import.
+    _CONCURRENCY_GUARD._max_concurrent = cfg.max_concurrent_tasks  # noqa: SLF001 - see note above
 
     # Phase 8 (2026-08-02, docs/DECISIONS.md): day-based retention for
     # trace logs/screenshots, run once at startup before this task's own
@@ -167,8 +215,26 @@ def main(instruction: str) -> dict:
             memory=memory,
             log_dir=cfg.log_dir,
             llm_risk_judge=_build_risk_model_judge(cfg),
+            operational_limits=_build_operational_limits(cfg),
+            concurrency_guard=_CONCURRENCY_GUARD,
         )
-        result = orchestrator.run_task(instruction)
+        try:
+            result = orchestrator.run_task(instruction)
+        except Exception as exc:
+            # Phase 15: OperationalLimitExceeded raised from
+            # acquire_task_limits_session() itself (i.e. the concurrency
+            # ceiling was already at capacity before this task even started)
+            # propagates here rather than being caught inside run_task() --
+            # see orchestrator.py's run_task() docstring/comment for why.
+            # Surfaced as a clear, actionable message rather than a raw
+            # traceback, matching this project's existing convention for
+            # startup-time failures (e.g. ChromeProfileLaunchError's message).
+            from src.observability.operational_limits import OperationalLimitExceeded
+
+            if isinstance(exc, OperationalLimitExceeded):
+                print(f"[error] {exc}")
+                raise
+            raise
 
     memory.close()
     print(f"\nTask finished with status: {result['status']}")

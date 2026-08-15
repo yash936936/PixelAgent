@@ -23,8 +23,14 @@ hardening (see docs/DECISIONS.md): every step is now also checked against
 brain/boundary_guard.py's deterministic hard-boundary patterns *before*
 risk classification -- this runs regardless of what the LLM planner
 proposed and cannot be gated/edited around, since context.md's hard
-boundaries are non-negotiable, not just another risk tier. See
-docs/PHASES.md Part 1.2, Part 2.3, Part 3.1, and Phase 4.
+boundaries are non-negotiable, not just another risk tier. Phase 15
+(2026-08-11, docs/DECISIONS.md) adds operational safety limits ON TOP OF
+the existing max_steps_per_task budget below: a hard cost ceiling, a
+cooperative wall-clock timeout, and a process-wide concurrent-task limit --
+all independently optional, all raising a single new OperationalLimitExceeded
+type kept deliberately distinct from boundary/risk-related exceptions, since
+this is an infrastructure/cost guard, not a safety classification. See
+docs/PHASES.md Part 1.2, Part 2.3, Part 3.1, Phase 4, and Phase 15.
 """
 from __future__ import annotations
 
@@ -41,6 +47,12 @@ from src.brain.risk_model_backend import semantic_boundary_match
 from src.confirmation.gate import ConfirmationGate, GateContext, GateDecision
 from src.memory.memory_api import MemoryAPI
 from src.observability.logger import Logger
+from src.observability.operational_limits import (
+    OperationalLimitExceeded,
+    OperationalLimits,
+    TaskConcurrencyGuard,
+    acquire_task_limits_session,
+)
 from src.perception import screen_diff
 
 # Actions that shouldn't be expected to visibly change the screen.
@@ -67,6 +79,8 @@ class Orchestrator:
         memory: MemoryAPI | None = None,
         log_dir: Path | None = None,
         llm_risk_judge=None,
+        operational_limits: OperationalLimits | None = None,
+        concurrency_guard: TaskConcurrencyGuard | None = None,
     ) -> None:
         self._planner = planner
         self._driver = driver
@@ -96,17 +110,44 @@ class Orchestrator:
         # system still works exactly as before, just without the second
         # opinion, so this is additive rather than a hard requirement.
         self._llm_risk_judge = llm_risk_judge
+        # Phase 15 (2026-08-11, docs/DECISIONS.md): operational safety
+        # limits, independent of and in addition to max_steps above. Both
+        # params default to None/a fresh unlimited guard, so an Orchestrator
+        # constructed without them behaves EXACTLY as before this phase --
+        # this is purely additive, matching every other optional-dependency
+        # param on this constructor (mouse_keyboard, replanner, memory, etc.).
+        self._operational_limits = operational_limits or OperationalLimits()
+        self._concurrency_guard = concurrency_guard or TaskConcurrencyGuard(
+            max_concurrent=self._operational_limits.max_concurrent_tasks
+        )
 
     def run_task(self, instruction: str) -> dict:
+        # Phase 15: acquire a concurrency slot and start the wall-clock/cost
+        # guards for this task before anything else runs. Raises
+        # OperationalLimitExceeded immediately (nothing partially started)
+        # if the concurrency ceiling is already at capacity -- this is
+        # deliberately NOT caught below alongside ordinary per-step errors;
+        # it should propagate to the caller (main.py/worker.py) exactly like
+        # a startup-time config error would, since no task has begun yet.
+        limits_session = acquire_task_limits_session(self._operational_limits, self._concurrency_guard)
+        try:
+            return self._run_task_inner(instruction, limits_session)
+        finally:
+            limits_session.release()
+
+    def _run_task_inner(self, instruction: str, limits_session) -> dict:
         history: list[dict] = []
         outcome_status = "incomplete"
         start_step = 1
         any_edits = False
+        running_cost = 0.0
 
         if self._memory is not None:
             episode = self._memory.find_replay(instruction)
             if episode is not None:
-                replayed, replay_ok, replay_edited = self._replay_episode(instruction, episode, history)
+                replayed, replay_ok, replay_edited = self._replay_episode(
+                    instruction, episode, history, limits_session
+                )
                 any_edits = any_edits or replay_edited
                 start_step = replayed + 1
                 if replay_ok:
@@ -124,70 +165,106 @@ class Orchestrator:
                 # remaining steps, using what replay already executed as
                 # context/history rather than starting over from scratch.
 
-        for step_num in range(start_step, self._max_steps + 1):
-            screen_state = self._observe()
-            step = self._planner.next_step(instruction, screen_state, history)
+        try:
+            for step_num in range(start_step, self._max_steps + 1):
+                # Phase 15: cooperative wall-clock check at every step
+                # boundary, alongside the existing max_steps_per_task loop
+                # bound above. See WallClockGuard's docstring for why this
+                # can only stop a task here, not preempt a single hung step.
+                limits_session.wall_clock.check()
 
-            if step["action"] == "done":
-                outcome_status = "done"
-                self._logger.log_step(
-                    step_num, step, {"status": "task_complete"}, llm_call=True, cost=self._planner_cost()
-                )
-                break
+                screen_state = self._observe()
+                step = self._planner.next_step(instruction, screen_state, history)
 
-            try:
-                self._check_boundary(step_num, step)
-            except BoundaryBlocked as exc:
-                outcome_status = "blocked_hard_boundary"
-                self._logger.log_step(step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)})
-                break
-            self._check_injection_signal(step_num, step)
-
-            risk = self._classify_risk(step_num, step)
-
-            if self._risk_classifier.needs_confirmation(risk):
-                decision = self._gate.request_approval(step, risk, self._gate_context())
-                self._logger.log_gate_decision(step_num, step, risk, decision)
-                if decision.verdict != "approved":
-                    outcome_status = f"stopped_{decision.verdict}"
+                if step["action"] == "done":
+                    outcome_status = "done"
+                    self._logger.log_step(
+                        step_num, step, {"status": "task_complete"}, llm_call=True, cost=self._planner_cost()
+                    )
                     break
-                if decision.edited_step is not None:
-                    any_edits = True
-                    if self._replanner is not None:
-                        self._replanner.review_and_learn(
-                            instruction, step, decision.edited_step, memory=self._memory
-                        )
-                    step = decision.edited_step
 
-            try:
-                action_outcome = self._execute_and_verify(
-                    instruction, step, screen_state, history, step_num
-                )
-            except BoundaryBlocked as exc:
-                self._logger.log_step(
-                    step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)}, risk=risk
-                )
-                outcome_status = "blocked_hard_boundary"
-                break
-            except ReplanExhausted as exc:
-                self._logger.log_step(
-                    step_num, step, {"status": "replan_exhausted", "error": str(exc)}, risk=risk
-                )
-                outcome_status = "error"
-                break
-            except Exception as exc:  # noqa: BLE001 - deliberately broad, logged not swallowed
-                self._logger.log_step(step_num, step, {"status": "error", "error": str(exc)}, risk=risk)
-                outcome_status = "error"
-                break
+                try:
+                    self._check_boundary(step_num, step)
+                except BoundaryBlocked as exc:
+                    outcome_status = "blocked_hard_boundary"
+                    self._logger.log_step(step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)})
+                    break
+                self._check_injection_signal(step_num, step)
 
-            history.append({"step": step, "outcome": action_outcome})
-            self._logger.log_step(
-                step_num, step, action_outcome, risk=risk, llm_call=True, cost=self._planner_cost()
-            )
-        else:
-            raise MaxStepsExceeded(
-                f"Task did not complete within {self._max_steps} steps. "
-                "See docs/TRD.md §3.1 for the max-step budget rationale."
+                risk = self._classify_risk(step_num, step)
+
+                if self._risk_classifier.needs_confirmation(risk):
+                    decision = self._gate.request_approval(step, risk, self._gate_context())
+                    self._logger.log_gate_decision(step_num, step, risk, decision)
+                    if decision.verdict != "approved":
+                        outcome_status = f"stopped_{decision.verdict}"
+                        break
+                    if decision.edited_step is not None:
+                        any_edits = True
+                        if self._replanner is not None:
+                            self._replanner.review_and_learn(
+                                instruction, step, decision.edited_step, memory=self._memory
+                            )
+                        step = decision.edited_step
+
+                try:
+                    action_outcome = self._execute_and_verify(
+                        instruction, step, screen_state, history, step_num
+                    )
+                except BoundaryBlocked as exc:
+                    self._logger.log_step(
+                        step_num, step, {"status": "hard_boundary_blocked", "error": str(exc)}, risk=risk
+                    )
+                    outcome_status = "blocked_hard_boundary"
+                    break
+                except ReplanExhausted as exc:
+                    self._logger.log_step(
+                        step_num, step, {"status": "replan_exhausted", "error": str(exc)}, risk=risk
+                    )
+                    outcome_status = "error"
+                    break
+                except Exception as exc:  # noqa: BLE001 - deliberately broad, logged not swallowed
+                    self._logger.log_step(step_num, step, {"status": "error", "error": str(exc)}, risk=risk)
+                    outcome_status = "error"
+                    break
+
+                history.append({"step": step, "outcome": action_outcome})
+                step_cost = self._planner_cost()
+                running_cost += step_cost
+                self._logger.log_step(
+                    step_num, step, action_outcome, risk=risk, llm_call=True, cost=step_cost
+                )
+
+                # Phase 15: cost check after this step's cost has actually
+                # been added to running_cost -- checked post-step rather
+                # than pre-step, since we can only know a step's real cost
+                # after the planner call it required has already happened
+                # (matches how LoopAudit.est_cost is already accumulated
+                # elsewhere in this codebase; this does not double-track,
+                # it reads the same running total this method already
+                # computes).
+                limits_session.cost.check(running_cost)
+            else:
+                raise MaxStepsExceeded(
+                    f"Task did not complete within {self._max_steps} steps. "
+                    "See docs/TRD.md §3.1 for the max-step budget rationale."
+                )
+        except OperationalLimitExceeded as exc:
+            # Phase 15: distinct from every other break-out-of-the-loop path
+            # above (boundary block, gate denial, replan exhaustion, a raw
+            # execution error) -- this is an infrastructure/cost stop, not a
+            # safety-classification outcome, so it gets its own status value
+            # rather than being folded into "error". Logged the same way
+            # every other terminal event in this loop is logged, so it shows
+            # up in the trace exactly like a hard-boundary block does.
+            outcome_status = "operational_limit_exceeded"
+            self._logger.log_event(
+                0,
+                {
+                    "status": "operational_limit_exceeded",
+                    "limit_name": exc.limit_name,
+                    "error": str(exc),
+                },
             )
 
         result = {"instruction": instruction, "history": history, "status": outcome_status}
@@ -197,7 +274,7 @@ class Orchestrator:
         return result
 
     def _replay_episode(
-        self, instruction: str, episode, history: list[dict]
+        self, instruction: str, episode, history: list[dict], limits_session
     ) -> tuple[int, bool, bool]:
         """Attempts to replay a matched past episode's step plan verbatim,
         skipping fresh LLM planning calls for as many steps as replay stays
@@ -210,13 +287,24 @@ class Orchestrator:
         task. A step actually executed during replay is logged with
         llm_call=False, since no planner call was made for it -- this is
         what makes the Phase 3/4 "fewer LLM calls on repeat tasks" success
-        criterion visible in the trace log's LoopAudit summary."""
+        criterion visible in the trace log's LoopAudit summary.
+
+        Phase 15 (2026-08-11): also checked against the same wall-clock
+        guard as fresh planning -- a replayed task can still run long if
+        e.g. verification/replanning kicks in repeatedly, so this path
+        isn't exempt from the timeout just because it skips LLM calls.
+        Replay steps have no real per-call cost (llm_call=False, cost
+        always 0 for this path already, per the existing LoopAudit
+        convention), so no cost check is needed here -- CostGuard would
+        never trip on values that are always 0."""
         any_edits = False
         self._logger.log_event(
             0, {"status": "replay_attempt", "source_episode_id": episode.id, "match_score": episode.match_score}
         )
 
         for idx, step in enumerate(episode.steps, start=1):
+            limits_session.wall_clock.check()
+
             screen_state = self._observe()
 
             try:
