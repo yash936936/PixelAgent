@@ -32,3 +32,9 @@ Thumbs.db
 profiles/
 profiles_broken_backup/
 *.dmp
+
+# Chrome/Playwright profile data - crash dumps and browser state can leak
+# credentials (confirmed, 2026-08-12/15). Never commit these.
+profiles/
+profiles_broken_backup/
+*.dmp
