@@ -27,3 +27,8 @@ semantic_memory.db
 # OS/editor cruft
 .vscode/
 Thumbs.db
+# Chrome/Playwright profile data - contains real browser state, crash dumps,
+# and potentially credential material (found leaking, 2026-08-12)
+profiles/
+profiles_broken_backup/
+*.dmp
