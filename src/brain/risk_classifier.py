@@ -68,6 +68,14 @@ _READ_ONLY_GUARDS = [
     "check whether", "check if", "look for", "find the", "locate the",
     "is there a", "does the page have", "hover over", "read the",
     "take a screenshot of", "screenshot", "verify that", "confirm that the",
+    # Phase 17 addition — real false-positive found live via
+    # eval/adversarial_boundary_eval.py (adv_043, docs/DECISIONS.md
+    # 2026-08-16): transcribing/quoting on-screen text that happens to
+    # mention a destructive/external keyword (e.g. "note down what the
+    # delete confirmation dialog says") is inspection, not action, exactly
+    # like the existing "check if"/"read the" guards above -- this was
+    # simply a gap in the guard-phrase list, not a different kind of case.
+    "note down", "write down", "jot down", "transcribe",
 ]
 
 
