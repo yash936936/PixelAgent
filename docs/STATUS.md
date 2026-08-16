@@ -6,38 +6,50 @@ Update this file every time a source or doc file is created, modified, or comple
 line at the bottom when this file changes.
 
 ## Overall progress
-**Phase: 12 — Docker deployment (browser-only mode), COMPLETE (2026-08-02). Phase 11's installer is now
-ALSO fully verified end-to-end on real Windows hardware (2026-08-08) — see update below.** Phases 1–5
-complete; native Windows GUI added 2026-07-12; Phase 6 (semantic layer live-wired) complete 2026-08-01;
-Phase 7 (first real live validation) complete 2026-08-02 — both browser and desktop paths completed a task
-end-to-end with zero errors after nine real bugs found and fixed; Phase 8 (encryption-at-rest + log
-retention) complete and confirmed working on the user's real Windows machine; Phase 9 (injection-aware,
-non-blocking risk signal) complete; Phase 10 (Track B data bootstrap) complete with an honest zero result;
-Phase 11 (packaging & distribution) complete in code as of 2026-08-02, and as of **2026-08-08 the actual
-installer has now been built, installed, run, and uninstalled on real Windows hardware** — closing the
-"nothing in installer/ has been run on a real Windows machine" caveat that persisted through every earlier
-entry. Full reasoning for all in `docs/DECISIONS.md`'s 2026-08-01/2026-08-08 entries.
+**Phase: 17 — Legal & trust, COMPLETE (2026-08-16).** Phases 1–12 complete (native Windows GUI added
+2026-07-12; Phase 6 semantic layer live-wired 2026-08-01; Phase 7 first real live validation 2026-08-02 —
+both browser and desktop paths completed a task end-to-end after nine real bugs found and fixed; Phase 8
+encryption-at-rest + log retention confirmed on real hardware; Phase 9 injection-aware risk signal; Phase
+10 Track B data bootstrap, honest zero result; Phase 11 packaging in code 2026-08-02, installer fully
+verified end-to-end on real Windows hardware 2026-08-08, five real bugs found and fixed; Phase 12
+browser-only Docker). **Phase 13 (nested-Windows-VM Docker) is ON HOLD (2026-08-09)** — infrastructure
+(`/dev/kvm`) not confirmed available; files written but not merged, revisit later. **Phase 14 (CI/CD &
+release engineering) is COMPLETE for its achievable scope (2026-08-11)** — `v0.12.4`'s release run was the
+first fully green run in this project's history; six real bugs found and fixed across the first CI/release
+runs (Tesseract install ordering, missing Qt libs in the GUI job, an eval-regression regex mismatch, a
+stale installer Source path masked by local build artifacts, the dead `gemini-2.5-flash` default, and a
+missing `permissions: contents: write` block) — full detail in `docs/DECISIONS.md`'s 2026-08-09/08-11
+entries. Automated rollback and the Windows-VM Docker variant remain explicit open items, not silently
+dropped. **Phase 15 (operational safety limits) is IN PROGRESS** — `operational_limits.py`'s three guards
+(cost/wall-clock/concurrency) are written, tested standalone, and wired into `orchestrator.py`/`config.py`/
+`main.py`/`worker.py`, but the actual success criterion (a real multi-hour stress run) has not been
+performed, and the new orchestrator-level wiring tests were only syntax-checked, not executed, when
+written. **Phase 16 (security review) is COMPLETE (2026-08-15)** — a fresh-eyes review found 7 findings,
+all triaged: 1 fixed immediately (local `detect-secrets` pre-commit hook), 1 scheduled into Phase 17
+(DPAPI's guarantee boundary), 4 accepted with reasoning recorded, 1 acknowledged as positive. `.env`'s
+plaintext credential storage remains a deliberately deferred, explicitly open gap (needs a Windows
+Credential Manager migration, scoped as its own future project).
 
-**Phase 12**: new `EXECUTION_MODE` config value (`full_desktop` default, or `browser_only`) — when
-`browser_only`, `main.py`/`worker.py` skip even attempting to construct `MouseKeyboard`, verified with a
-test asserting it's never called at all, not just that the result degrades to `None`. `Dockerfile`/
-`docker-compose.yml`/`docs/DOCKER.md` (all new) define the actual browser-only container — **not built or
-run in this environment**, since no `docker` binary is available here; written correctly per Docker's
-documented syntax, still unverified until run on a real machine with Docker installed, per
-`docs/DOCKER.md`'s own smoke-test checklist. Unchanged by this update.
+**Phase 17 (legal & trust) is COMPLETE (2026-08-16)** — `TERMS.md`/`PRIVACY.md` written (folding in
+Finding 6's DPAPI documentation as planned), `docs/COMPLIANCE.md` gives a documented answer to the ToS
+liability question, and `src/observability/audit_export.py` (new, 12/12 tests actually run and passing)
+turns raw trace logs into a legible per-task Markdown audit trail for an end user. This closes every phase
+in the deployment-readiness gate except Phase 13 (on hold) and Phase 15 (wired, stress-run unconfirmed) —
+Phase 18 (field testing/beta) is the only phase left unstarted.
 
-Non-GUI suite: 195 → 354 tests passing; GUI suite: 0 → 48 tests passing (both now runnable in this
-environment as of Phase 11) — full details in `docs/DECISIONS.md`'s 2026-08-02 Phase 11/12 entries.
-**Still open:** real Windows DPI/multi-monitor scaling unverified; `Dockerfile`/`docker-compose.yml`'s
-build/run steps still not executed on a real machine; Phase 9's injection signal remains a phrase-bank
-heuristic; Phase 10's success criterion remains unmet (no real correction data exists yet); Phase 13
-(nested-Windows-VM Docker, for real desktop automation) remains unbuilt; **`config.py`'s `llm_model`
-default and `.env.example` still reference the now-deprecated `gemini-2.5-flash` — a real, source-level gap
-found 2026-08-08, not yet fixed at the source (see that update below and
-`PATCH_config_and_env_example.md`)**; a desktop-target-type task has not yet been confirmed from the
-*installed* (packaged) build specifically, only from a source-run app. Next up: fix the `llm_model` default
-at the source, then either Phase 13 (Docker deployment, full desktop automation via nested Windows VM) or
-Phase 14 (CI/CD & release engineering) — see `docs/PHASES.md` for the full roadmap order.
+`config.py`'s `llm_model` default (found dead, 404-ing on `gemini-2.5-flash`, 2026-08-08) **has since been
+fixed at the source** — default and `.env.example` both now read `gemini-3.5-flash-lite`, confirmed GA.
+
+Non-GUI suite: 387 tests passing (confirmed 2026-08-16, full run); GUI suite: 48 tests passing (both runnable in this environment as of
+Phase 11); adversarial eval set grown from 36 to 48 cases as part of Phase 16.
+**Still open, stated plainly:** real Windows DPI/multi-monitor scaling unverified; `Dockerfile`/
+`docker-compose.yml`'s build/run steps still not executed on a real machine; Phase 9's injection signal
+remains a phrase-bank heuristic; Phase 10's success criterion remains unmet (no real correction data exists
+yet); a desktop-target-type task has not yet been confirmed from the *installed* (packaged) build
+specifically, only from a source-run app; Phase 15's stress-run success criterion is unmet; `.env`'s
+plaintext storage (Phase 16 Finding 2) remains unfixed by design. Next up: Phase 17 (legal & trust —
+`TERMS.md`/`PRIVACY.md`, folding in Finding 6's DPAPI documentation) — see `docs/PHASES.md` for the full
+roadmap order.
 
 ## Documentation files (`docs/` + root)
 
@@ -66,8 +78,8 @@ Phase 14 (CI/CD & release engineering) — see `docs/PHASES.md` for the full roa
 | File | Phase | Status |
 |---|---|---|
 | `src/main.py` | 1.1 (updated Phase 6, 2026-08-01, Phase 11/12, 2026-08-02) | Complete (`_build_risk_model_judge` adds `"semantic"` branch — no endpoint needed; `cli_main()` added for the `pixel` console entry point; `_build_desktop_backends()` respects `EXECUTION_MODE=browser_only`, verified never to call `MouseKeyboard` in that mode) |
-| `src/config.py` | 1.1 (updated Phase 6, 2026-08-01, Phase 8/12, 2026-08-02) | **Needs review (2026-08-08)** — `risk_model_backend` accepts `"semantic"`; `log_retention_days` and `execution_mode` added; but `llm_model`'s hardcoded default (`"gemini-2.5-flash"`, line 168) is now a dead model per Google's own deprecation notices — every fresh install inherits a 404 on its first task until this default is changed. Not yet fixed at the source; see `PATCH_config_and_env_example.md` for the exact one-line edit. |
-| `src/doctor.py` | Phase 7 prep (2026-08-01), updated Phase 8 (2026-08-02) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer/encryption-at-rest without executing a real task. Not a substitute for Phase 7 itself. Consider adding a live model-availability check here too, given the `llm_model` gap found 2026-08-08 — not yet added. |
+| `src/config.py` | 1.1 (updated Phase 6, 2026-08-01, Phase 8/12, 2026-08-02, Phase 15, 2026-08-11) | Complete — `risk_model_backend` accepts `"semantic"`; `log_retention_days` and `execution_mode` added; `llm_model`'s default fixed at the source (2026-08-11) to `"gemini-3.5-flash-lite"`, confirmed GA; three new Phase 15 fields (`max_cost_usd`, `max_wall_clock_seconds`, `max_concurrent_tasks`). |
+| `src/doctor.py` | Phase 7 prep (2026-08-01), updated Phase 8 (2026-08-02) | Complete — pre-flight diagnostic (`python -m src.doctor`), checks Tesseract/Playwright/config/writable-dirs/semantic-layer/encryption-at-rest without executing a real task. Not a substitute for Phase 7 itself. A live model-availability check has not been added, still worth considering. |
 | `requirements.txt` | 1.1 | Complete |
 | \`src/brain/orchestrator.py\` | 1.2 (updated 2.3, 3.1, Phase 4, Phase 6, Phase 9) | Complete (Phase 2 verify/replan + Phase 3 episodic replay + Phase 4 edit-learning + Phase 6 always-on semantic boundary layer + Phase 9 non-blocking injection-signal check, both wired in) |
 | \`src/brain/boundary_guard.py\` | 1.0 (updated Phase 6, Phase 9) | Complete (hard-boundary `check()` + Phase 9's non-blocking `check_injection_signal()`, deliberately kept separate) |
@@ -81,6 +93,7 @@ Phase 14 (CI/CD & release engineering) — see `docs/PHASES.md` for the full roa
 | `src/confirmation/prompt_ui.py` | 1.4 | Complete |
 | `src/observability/logger.py` | 1.5 (updated Phase 4, updated Phase 8, 2026-08-02) | Complete (LoopAudit + log_event, llm_call accuracy; `prune_old_logs()` day-based retention for trace logs/screenshots) |
 | `src/observability/trace_replay.py` | 5 (updated Phase 10, 2026-08-02) | Complete (`unclassified_or_missing_risk()` fixed — real bug found mining actual trace data, was flagging `done` steps and replan-retry noise as false gaps) |
+| `src/observability/audit_export.py` | Phase 17 (2026-08-16) | Complete — builds on `trace_replay.py`'s `TraceReplay`, collapses developer-trace log lines into one legible `AuditEntry` per settled step, renders a Markdown audit trail. 12/12 tests passing (actually run, not just syntax-checked). |
 | \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
@@ -103,7 +116,7 @@ Phase 14 (CI/CD & release engineering) — see `docs/PHASES.md` for the full roa
 | `src/gui/widgets/memory_panel.py` | GUI (2026-07-12) | Complete |
 | `src/gui/widgets/confirmation_dialog.py` | GUI (2026-07-12) | Complete |
 | `requirements-gui.txt` | GUI (2026-07-12) | Complete (separate from requirements.txt, PySide6 only) |
-| `tests/` | ongoing | In progress. Non-GUI: 354 passing — see prior entries for the full breakdown. **No new tests added 2026-08-08** — tonight's fixes were all in `installer/pixel-agent.iss` (not exercised by the Python test suite) and a manual `.env` workaround for `llm_model` (the real fix, changing `config.py`'s default, has not yet been made or tested — see the `src/config.py` row above). |
+| `tests/` | ongoing | In progress. Non-GUI: 387 passing, confirmed 2026-08-16 with a real full-suite run (`pytest tests/ --ignore=tests/integration --ignore=tests/gui`) — up from 354 with the addition of `tests/observability/test_audit_export.py` (12 new, Phase 17). See `docs/DECISIONS.md` for the full breakdown, including a real test-data bug (`adv_045`'s phrasing) the full run itself caught. |
 | `tests/integration/` | Improvement pass (2026-08-01) | New — offline real-pixel harness: real headless Chromium + real Tesseract + real `screen_diff`, no mocks. Requires Playwright's Chromium install + Tesseract binary; `pytest --ignore=tests/integration` to skip, same convention as `tests/gui/` |
 
 ## Known blockers
@@ -121,14 +134,16 @@ This project underwent an independent line-by-line gap review, and every concret
 was fixed and tested (see `docs/DECISIONS.md` and `docs/DEBUG.md` entries dated 2026-07-12). What's
 listed below is what remains, stated plainly rather than glossed over:
 
-- **`config.py`'s `llm_model` default is a dead model (2026-08-08, new).** `"gemini-2.5-flash"` now
-  returns a hard 404 for new API callers per Google's own deprecation schedule. Worked around on one
-  installed machine by hand-editing that machine's `.env`; not yet fixed at the source. Every fresh
-  install (including anyone else who downloads the installer) will hit this exact same 404 on their very
-  first task until `config.py`'s default and `.env.example` are both updated. This is a real, currently
-  live gap, not a hypothetical one — see `PATCH_config_and_env_example.md` for the fix.
-- **Zero live validation against real OS DPI/multi-monitor scaling — still true.** Unchanged by tonight's
-  packaging work.
+- **`config.py`'s `llm_model` default was a dead model — fixed 2026-08-11.** `"gemini-2.5-flash"` had
+  started returning a hard 404 for new API callers; the default (and `.env.example`, and every hardcoded
+  test occurrence) was replaced with `"gemini-3.5-flash-lite"` at the source, not just worked around on one
+  machine. The `SetupWizard` still has no in-wizard field to override `LLM_MODEL` — that narrower gap
+  remains open.
+- **Zero live validation against real OS DPI/multi-monitor scaling — still true.**
+- **`.env`'s plaintext credential storage remains unfixed, by deliberate design (Phase 16 Finding 2).** A
+  real fix needs Windows Credential Manager integration and a config-loading redesign — scoped as its own
+  future project, not bundled into any phase so far. Phase 16's pre-commit secret scanner reduces the most
+  likely real-world failure mode (a key landing in a commit) in the meantime.
 - **The hard-boundary guard (`boundary_guard.py`) is still keyword/phrase-based as its primary mechanism**,
   with an additive semantic layer (Phase 6) — unchanged by this update.
 - **Screenshots and logs are encrypted at rest on Windows (Phase 8, confirmed working)**, but full-frame
@@ -137,9 +152,14 @@ listed below is what remains, stated plainly rather than glossed over:
 - **The "no de-safetied base model" boundary is enforced by review process, not runtime code.** Unchanged.
 - **The LLM risk-judge fallback costs an extra LLM call per ambiguous step and can be confidently wrong
   with no built-in way to distinguish that from a correct verdict without human review.** Unchanged.
-- **A desktop-target-type task has not yet been confirmed from the installed (packaged) build specifically
-  (2026-08-08, new)** — only a browser-target-type task has been run from `installer/`'s output so far;
-  Phase 7's desktop-path testing predates the installer work and was against a source-run app.
+- **A desktop-target-type task has not yet been confirmed from the installed (packaged) build specifically**
+  — only a browser-target-type task has been run from `installer/`'s output so far; Phase 7's desktop-path
+  testing predates the installer work and was against a source-run app.
+- **Phase 15's operational limits are wired but not stress-tested.** No real multi-hour run has confirmed
+  the agent self-terminates cleanly on a real cost/wall-clock/concurrency limit; the wiring's own regression
+  tests were only syntax-checked, not executed, when written.
+- **Automated release rollback is unimplemented (Phase 14).** `release.yml`'s rollback job only prints
+  manual steps.
 
 ## Track B: trained-model architecture
 Unchanged by tonight's update — see prior entries. Two separate trained-model interfaces exist, both
@@ -149,32 +169,25 @@ live-wired): 73% overall. Neither satisfies the deployment gate in `eval/README.
 checklist.
 
 ## Next action
-1. **Fix `config.py`'s `llm_model` default and `.env.example` at the source** (see
-   `PATCH_config_and_env_example.md`) — this is now the single highest-priority small fix, since it's a
-   live, reproducible bug that will hit every future install, not a hypothetical gap.
-2. Rebuild the installer with the updated `installer/pixel-agent.iss` (already includes the
-   `PLAYWRIGHT_BROWSERS_PATH` fix) and confirm a *fresh* install runs a browser task with zero manual
-   `.env` patching required — the real proof tonight's fix is baked into the build process, not just this
-   one machine.
-3. Once that's confirmed, decide between Phase 13 (nested-Windows-VM Docker for real desktop automation)
-   or Phase 14 (CI/CD & release engineering) per `docs/PHASES.md`'s roadmap order — not strictly forced,
-   pick based on what's actually useful next.
-4. Longer-standing, unchanged: mine real corrections into Track B's training pipeline once enough live
-   usage exists; confirm the desktop path from the installed build specifically, not just from source.
+1. **Phase 18 (field testing/beta)** is the only unstarted phase left in the deployment-readiness gate —
+   get real users (not the author) running real tasks over a real time window (`docs/PHASES.md` suggests
+   5-10 users, two weeks). Needs a feedback/crash-report channel and `docs/BETA_FINDINGS.md` set up first.
+2. Run a real multi-hour (or artificially-tightened-limit) stress test to close Phase 15's still-open
+   success criterion, and actually execute `tests/brain/test_orchestrator_operational_limits.py` for real
+   (only `py_compile`-checked so far).
+3. Longer-standing, unchanged: mine real corrections into Track B's training pipeline once enough live
+   usage exists; confirm the desktop path from the installed build specifically, not just from source;
+   revisit Phase 13 (nested-Windows-VM Docker) once `/dev/kvm`-capable infrastructure is available.
+4. Scoped future work, not blocking: Windows Credential Manager migration for `.env` (Phase 16 Finding 2);
+   automated release rollback (Phase 14); a `LLM_MODEL` field in the `SetupWizard`.
 
 ---
-**Last updated:** 2026-08-08 (First real Windows installer build/install/run/uninstall cycle completed
-end-to-end. Five real bugs found and fixed: wrong `README.md` source path, `OutputDir` still resolving one
-directory too high after an incomplete first fix, PyInstaller `--name` not matching `pixel-agent.iss`'s
-`MyAppExeName` — producing a "successful" build with a broken Start Menu shortcut, PyInstaller's bundled
-Playwright having no Chromium of its own — fixed by seeding `PLAYWRIGHT_BROWSERS_PATH` into the generated
-`.env` via `pixel-agent.iss`'s existing `[Code]` section, and a dead `gemini-2.5-flash` default in
-`config.py`/`.env.example` — worked around on the one installed machine, not yet fixed at the source.
-`docs/RELEASE.md`'s verified/unverified table now shows Phase 11's installer as genuinely `[VERIFIED]`
-end-to-end for the browser path, including a real completed task from the packaged build. See
-`docs/DECISIONS.md`'s 2026-08-08 entry for full detail. Not yet done: fixing `llm_model`'s default at the
-source, and confirming a desktop-target-type task from the installed build specifically.)
+**Last updated:** 2026-08-16 (Phase 17 — legal & trust — implemented and complete. `TERMS.md`, `PRIVACY.md`,
+`docs/COMPLIANCE.md` written; `src/observability/audit_export.py` built and tested (12/12 passing for
+real). Full detail in `docs/DECISIONS.md`'s second 2026-08-16 entry. This closes every phase in the
+deployment-readiness gate except Phase 13 (on hold, infrastructure not available) and Phase 15 (wired but
+not yet stress-tested) — Phase 18 is the only phase left entirely unstarted.)
 
 ---
 *(All entries prior to 2026-08-08 are preserved unchanged below/above per this file's own history — see
-the original file for the full record from Phase 1 through Phase 12.)*
+`docs/DECISIONS.md` for the full chronological record from Phase 1 through today.)*

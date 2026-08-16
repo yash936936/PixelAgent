@@ -322,12 +322,24 @@ outcome with no risk classified.
 ---
 
 ## Phase 11 — Packaging & distribution
-**Status: COMPLETE (2026-08-02).** Also a major, unplanned capability unlock: PySide6 turned out to
-actually install and run in this project's Linux build environment (`pip install PySide6==6.11.1`), which
-was not known to be possible before this phase. Every GUI test now runs and passes here — the full
-395-test suite (347 non-GUI + 48 GUI) ran together in one pass for the first time in this project's
-history, closing (going forward) the "GUI tests not re-verified in this environment" caveat that appeared
-throughout every earlier phase's docs.
+**Status: COMPLETE (2026-08-02) in code; installer FULLY VERIFIED end-to-end on real
+Windows hardware (2026-08-08).** Also a major, unplanned capability unlock: PySide6
+turned out to actually install and run in this project's Linux build environment
+(`pip install PySide6==6.11.1`), which was not known to be possible before this phase.
+Every GUI test now runs and passes here — the full 395-test suite (347 non-GUI + 48 GUI)
+ran together in one pass for the first time in this project's history.
+
+**2026-08-08 update:** the user completed the first full real-hardware build → install →
+run → uninstall cycle for `installer/pixel-agent.iss`, closing the "cannot compile or
+test in this Linux build environment" caveat that applied to the installer since it was
+first written. Five real bugs were found and fixed in the process (wrong `README.md`
+source path, `OutputDir` resolving one directory too high, a PyInstaller `--name`
+mismatch against `MyAppExeName` that produced a build which compiled clean but had a
+broken Start Menu shortcut, PyInstaller's bundled Playwright having no Chromium binary of
+its own, and — found in the same live-run session but NOT a packaging bug — a dead
+`gemini-2.5-flash` default in `config.py`, since fixed at the source, see the
+2026-08-11 entry below). Full detail in `docs/DECISIONS.md`'s 2026-08-08 entry and
+`docs/RELEASE.md`'s "Known issues found on first real build" section.
 
 Goal: everything up to Phase 10 makes the agent safe and validated to run; nothing yet makes it installable
 by anyone other than a developer running from source.
@@ -336,16 +348,18 @@ by anyone other than a developer running from source.
 |---|---|
 | `pyproject.toml` (new) | Proper packaging metadata. **Actually built and verified**: `python -m build --wheel`, installed, confirmed `pixel`/`pixel-gui` console commands genuinely work — not just written and assumed correct. |
 | `src/main.py` (updated) | New `cli_main()`, a zero-argument wrapper around `main(instruction)` for the `pixel` console entry point (`console_scripts` are invoked with no args). |
-| `src/gui/app.py`, `src/gui/setup_wizard_logic.py` (new), `src/gui/widgets/setup_wizard.py` (new) | First-run setup wizard — closes a real gap where `config.load()` ran before `QApplication` even existed, so a fresh install with no `.env` crashed with a raw traceback before any window appeared. Logic (`needs_setup`, `looks_like_a_real_api_key`, `write_env_file`) kept Qt-free and fully unit-tested; the `QDialog` itself constructed and exercised offscreen with real PySide6. |
-| `installer/pixel-agent.iss` (new) | Complete Inno Setup script — per-user install, optional Tesseract/Chromium components, pre-seeds `TESSERACT_CMD`. **Written per Inno Setup's documented syntax, NOT compiled** — `ISCC.exe` is a real Windows binary unavailable in this environment. |
-| `docs/RELEASE.md` (new) | The real build/sign/release process, with an honest per-step verified/unverified table rather than one blanket claim. Code signing explicitly flagged as not set up at all (no certificate exists). |
+| `src/gui/app.py`, `src/gui/setup_wizard_logic.py` (new), `src/gui/widgets/setup_wizard.py` (new) | First-run setup wizard — closes a real gap where `config.load()` ran before `QApplication` even existed. Logic kept Qt-free and fully unit-tested; the `QDialog` itself constructed and exercised offscreen with real PySide6. **Confirmed working on a genuinely clean install, 2026-08-08** — an earlier apparent skip of the wizard was traced to a leftover `.env` from prior testing, not a real bug. **Known gap found 2026-08-08, still open:** the wizard has no field for `LLM_MODEL`, so every install silently inherits `config.py`'s hardcoded default with no in-wizard override. |
+| `installer/pixel-agent.iss` (new, updated 2026-08-06 and 2026-08-08) | Complete Inno Setup script — per-user install, optional Tesseract/Chromium components, pre-seeds `TESSERACT_CMD`. **2026-08-06:** fixed `SourceDir`/`OutputDir` path resolution and documented the `robocopy`-over-`Copy-Item` staging fix. **2026-08-08:** fixed the PyInstaller `--name`/`MyAppExeName` mismatch (build-side, not a script change) and added a `PLAYWRIGHT_BROWSERS_PATH` line to the `.env`-seeding `[Code]` section, fixing a crash on the first browser-target-type task caused by PyInstaller's bundled Playwright having no Chromium of its own. **Now built, compiled, installed, and run successfully on real Windows hardware — no longer "written but unverified."** |
+| `docs/RELEASE.md` (new, updated 2026-08-06 and 2026-08-08) | The real build/sign/release process. **As of 2026-08-08, the verified/unverified table shows PyInstaller bundling, the Inno Setup compile, install/SetupWizard/uninstall, and a real completed browser-target-type task from the installed build as all `[VERIFIED]`** — genuinely run, not assumed. Code signing remains the one deliberately-unset-up step (no certificate exists). |
 
-**Phase 11 success criterion (MET for the software side, UNVERIFIED for the installer):** someone who
-isn't the author can download one file, install it, and get to a working first task with no terminal/
-source access. The `SetupWizard` genuinely closes the "no terminal access" gap for a person who already has
-the app running — verified with real PySide6 in this environment. The "download one file" half of this
-criterion depends on `installer/pixel-agent.iss` actually compiling and running correctly on a real Windows
-machine, which has **not** been done — see `docs/RELEASE.md`'s verified/unverified table.
+**Phase 11 success criterion (MET for the software side; installer half now also MET as
+of 2026-08-08):** someone who isn't the author can download one file, install it, and get
+to a working first task with no terminal/source access. The `SetupWizard` closes the
+"no terminal access" gap. **The "download one file" half of this criterion — the
+installer actually compiling and running correctly on a real Windows machine — has now
+been done and confirmed.** What remains open within Phase 11 specifically: confirming a
+desktop-target-type task specifically from the installed build rather than only from
+source.
 
 ---
 
@@ -374,6 +388,19 @@ installed before treating this deployment path as confirmed working.
 ---
 
 ## Phase 13 — Docker deployment (full desktop automation, via nested Windows VM)
+**Status: ON HOLD (2026-08-09).** A first pass at this phase's files (Dockerfile,
+provision.ps1, docker-compose.desktop.yml, reset-snapshot.sh, docs/DOCKER_DESKTOP.md)
+was written on 2026-08-09 but deliberately not applied to this repo — see
+`docs/DECISIONS.md`'s matching entry. Reason: this is the first phase in the project's
+history that cannot be verified on the Windows machine used for every prior live-run
+phase (7 through 12) — it requires a *separate* Linux host with `/dev/kvm` exposed,
+infrastructure not confirmed available. Rather than build out a phase that can't be
+tested, deliberately deferred until after Phase 14 (and, time permitting, 15-18) are
+complete — revisit once either that hardware is available or the roadmap has otherwise
+circled back with nothing else higher-priority left. The written-but-unapplied files
+from the 2026-08-09 attempt remain available if/when this phase resumes; they weren't
+discarded, just not merged into the working repo.
+
 Goal: the only way to genuinely containerize real desktop automation is to containerize a real Windows
 machine — a Windows guest running inside a VM (QEMU/KVM) inside the container (the pattern the open-source
 `dockur/windows` project uses), with PixelAgent installed normally inside that guest. This is materially
@@ -396,6 +423,22 @@ between runs.
 ---
 
 ## Phase 14 — CI/CD & release engineering
+**Status: COMPLETE for browser-only/native scope (2026-08-11).** `v0.12.4`'s release run
+was the first fully green run in this project's history (Windows installer build, Docker
+image build + smoke test, draft GitHub release, rollback-reminder job all succeeded).
+Four real bugs found and fixed getting `test.yml` green for the first time (Tesseract
+install ordering, missing Qt system libraries in the GUI job, a regex mismatch in
+`check_eval_regression.py`, and a stale `dist/pixel-agent/` path in
+`installer/pixel-agent.iss` masked by a local stale-build artifact), plus two more
+closing out `release.yml` (the dead `gemini-2.5-flash` default fixed at the source, and
+a missing `permissions: contents: write` block). Full detail in `docs/DECISIONS.md`'s
+2026-08-09 and 2026-08-11 entries, and `docs/RELEASE_ENGINEERING.md`.
+
+**Still open, not silently dropped:** automated rollback is unimplemented (the job only
+prints manual steps), and Phase 13's Windows-VM Docker variant is on hold — so "both
+Docker variants" in the original success criterion is met only for the browser-only
+variant.
+
 | File | Description |
 |---|---|
 | `.github/workflows/test.yml` (new) | Every push runs the full non-GUI suite, GUI suite (offscreen Qt), and the adversarial eval — every test run in this project's history to date has been manual. |
@@ -409,6 +452,15 @@ both Docker variants); a bad release can be rolled back without manual intervent
 ---
 
 ## Phase 15 — Operational safety limits
+**Status: IN PROGRESS (2026-08-11).** `operational_limits.py` (`CostGuard`,
+`WallClockGuard`, `TaskConcurrencyGuard`, all raising a distinct
+`OperationalLimitExceeded`) is written and wired into `orchestrator.py`, `config.py`,
+`main.py`, and `worker.py` — code complete. **Not yet met:** the actual success
+criterion below needs a real multi-hour stress run on real hardware, which has not been
+performed; the new orchestrator-level wiring tests were only syntax-checked
+(`py_compile`), not actually executed, in the environment that wrote them. Full detail
+in `docs/DECISIONS.md`'s 2026-08-11 entries.
+
 | File | Description |
 |---|---|
 | `src/config.py` (updated) | Hard ceilings beyond `max_steps_per_task`: max cost per task, max concurrent tasks, per-task wall-clock timeout with forced termination. |
@@ -422,6 +474,16 @@ without a memory leak, orphaned process, or runaway cost, and self-terminates cl
 ---
 
 ## Phase 16 — Security review
+**Status: COMPLETE (2026-08-15).** Independent fresh-eyes review conducted
+(`docs/SECURITY_REVIEW.md`), grounded in two real, confirmed incidents from this
+project's own session history. Seven findings identified and triaged
+(`docs/DECISIONS.md`'s 2026-08-15 entry): one fixed immediately (a local pre-commit
+secret scanner via `detect-secrets`), one scheduled into Phase 17 (Finding 6, DPAPI's
+guarantee boundary), four accepted with reasoning recorded (Findings 2-5), one
+acknowledged as a positive finding requiring no action (Finding 7). `.env`'s plaintext
+storage (Finding 2) remains deliberately deferred — a real Windows Credential Manager
+migration is scoped future work, not attempted here.
+
 | File | Description |
 |---|---|
 | *(review, not new code)* | Independent (ideally third-party, at minimum a fresh-eyes self-review) audit of the confirmation-gate/boundary-guard trust boundary — the eval harness's cases are a good regression suite, not a security audit. |
@@ -434,15 +496,26 @@ or explicitly accepted with reasoning recorded in `docs/DECISIONS.md`.
 ---
 
 ## Phase 17 — Legal & trust
+**Status: COMPLETE (2026-08-16).** `TERMS.md` and `PRIVACY.md` written, covering the
+confirmation gate/hard boundaries and the exact retention/encryption picture from Phase
+8 (DPAPI's real guarantee boundary, per Finding 6 of Phase 16's triage — folded in here
+as planned, not bolted onto Phase 16 out of sequence). `docs/COMPLIANCE.md` gives a
+documented (not legal-advice) answer to the ToS question. `src/observability/audit_export.py`
+(new) builds a legible, per-task Markdown audit trail on top of `trace_replay.py`'s
+existing parsing — one line per action with its risk, approval, and outcome, not raw
+JSONL. 12/12 new tests passing for real (not just syntax-checked).
+
 | File | Description |
 |---|---|
 | `TERMS.md`, `PRIVACY.md` (new) | User-facing terms and a privacy policy covering what's logged, where, and for how long (depends on Phase 8's retention decision). |
 | `docs/COMPLIANCE.md` (new) | Explicit review of target sites' Terms of Service re: automated access — a real liability question the moment this runs on behalf of anyone other than the original developer against their own accounts. |
-| Audit trail for end users (updated `trace_replay.py` or new export) | The existing trace logs were built for developer debugging. A second party trusting this agent with their accounts needs a legible "what did it do, when, why" view — not raw JSONL. |
+| `src/observability/audit_export.py` (new, updated `trace_replay.py` file table entry) | The existing trace logs were built for developer debugging. A second party trusting this agent with their accounts needs a legible "what did it do, when, why" view — not raw JSONL. |
 
-**Phase 17 success criterion:** a documented answer (not necessarily "yes it's fine everywhere") to "what
-happens legally if this agent takes an action a site's ToS prohibits," and an audit trail an end user could
-actually read.
+**Phase 17 success criterion (MET, 2026-08-16):** a documented answer (not necessarily "yes it's fine
+everywhere") to "what happens legally if this agent takes an action a site's ToS prohibits" (`docs/COMPLIANCE.md`),
+and an audit trail an end user could actually read (`src/observability/audit_export.py`'s
+`render_markdown()` — one legible line per action, folding gate approvals and final outcomes together,
+rather than the raw multi-line-per-step developer trace format).
 
 ---
 
