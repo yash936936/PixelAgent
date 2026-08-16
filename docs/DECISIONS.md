@@ -1419,3 +1419,67 @@ Phase 3 build
 - Finding 5 (injection-signal blind spot): [your decision]
 - Finding 6 (DPAPI guarantee not documented): [your decision]
 - Finding 7 (fail-loud pattern, positive): acknowledged, no action needed
+
+### [2026-08-15] Phase 16 triage — findings 1-7 dispositioned
+- **Type:** Design decision (triage of `docs/SECURITY_REVIEW.md`'s findings, per Phase
+  16's own success criterion — "findings are triaged and either fixed or explicitly
+  accepted with reasoning recorded")
+- **File(s) affected:** `docs/DECISIONS.md` (this entry), `.pre-commit-config.yaml`
+  (new), `.secrets.baseline` (new) — see Finding 1's disposition below for what was
+  actually implemented as part of this triage, not just decided.
+- **Dispositions:**
+  1. **Finding 1 (credential leak, pre-commit scanning gap) — FIX NOW, implemented.**
+     Not deferred: this session had two real, confirmed credential leaks (a plaintext
+     key in test fixtures, then a second key embedded in Chromium crash dumps), so this
+     is the one finding with concrete, repeated evidence rather than a hypothetical
+     risk. Added `detect-secrets` as a local pre-commit hook
+     (`.pre-commit-config.yaml`, baseline in `.secrets.baseline`) — every future commit
+     is now scanned locally before it can even reach `git push`, closing the gap that
+     GitHub's server-side push protection was the *only* line of defense on both prior
+     incidents.
+  2. **Finding 2 (`.env` plaintext storage) — ACCEPTED, scoped as future work, not
+     fixed now.** The reasoning in Phase 8's original deferral still holds: a real fix
+     needs Windows Credential Manager integration and a config-loading redesign, which
+     is a genuine scoped project of its own, not a quick patch. Finding 1's pre-commit
+     scanner substantially reduces the most likely real-world failure mode (a key
+     accidentally landing in a commit) even without this deeper fix, which is why
+     Finding 1 was prioritized ahead of this one despite Finding 2 being the more
+     "complete" fix in principle. Revisit as a dedicated future pass, not bundled into
+     Phase 16.
+  3. **Finding 3 (confirmation-gate prompt fatigue) — ACCEPTED, no fix identified.**
+     This is a human-factors risk, not a code defect, and no concrete code-level
+     mitigation was proposed by the review itself. Recorded as a known, accepted risk
+     rather than silently dropped. A future UX pass (e.g. periodic re-confirmation of
+     understanding on very long tasks, or a running risk-tier summary) could revisit
+     this, but nothing is scheduled.
+  4. **Finding 4 (boundary guard strength gap vs. roadmap) — ACCEPTED as an accurate
+     description of already-tracked, already-honest project status; no new action.**
+     This finding doesn't identify a new problem — it re-emphasizes an already-
+     documented one (Phase 10's honest zero result, the semantic layer's 73% ceiling).
+     Disposition: continue existing practice of keeping this visible in `STATUS.md`/
+     `PHASES.md` rather than letting it go stale; no new code action from this triage.
+  5. **Finding 5 (injection-signal blind spot, paraphrase-only) — ACCEPTED as a known,
+     already-documented limitation (Phase 9's own entry states this honestly); flagged
+     as a good candidate for a FUTURE phase (page-text extraction + diffing), not
+     scheduled now.** No regression, no new risk surfaced — the review just reinforces
+     prioritizing this if a future phase slot opens for it.
+  6. **Finding 6 (DPAPI's guarantee boundary not documented for end users) — FIX
+     SCHEDULED for Phase 17.** `docs/PHASES.md`'s Phase 17 (`TERMS.md`/`PRIVACY.md`)
+     is the natural, already-planned home for this — adding one explicit sentence
+     about DPAPI's actual guarantee (tied to the Windows account, not a defense
+     against a compromised session) belongs in that user-facing documentation pass
+     rather than being bolted onto Phase 16 out of sequence.
+  7. **Finding 7 (fail-loud pattern, positive) — acknowledged, no action needed**, as
+     originally noted.
+- **Why:** Closes the one remaining gap in Phase 16's success criterion — the review
+  and 12 new eval cases existed already, but findings hadn't been explicitly
+  dispositioned until this entry. Finding 1 was prioritized for immediate
+  implementation specifically because this session generated real, repeated evidence
+  for it, not a hypothetical — consistent with this project's general practice of
+  treating live-discovered problems with more urgency than theoretical ones.
+- **Impacts:** `docs/PHASES.md`'s Phase 16 can now be marked **COMPLETE** — its success
+  criterion required findings to be triaged and either fixed or explicitly accepted
+  with reasoning recorded, and this entry does that for all 7. Two follow-up items now
+  live on the roadmap rather than being lost: Finding 2 (`.env`/Credential Manager) as
+  unscheduled future work, and Finding 6 (DPAPI documentation) explicitly folded into
+  Phase 17's existing scope.
