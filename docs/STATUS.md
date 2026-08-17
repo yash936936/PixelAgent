@@ -20,11 +20,13 @@ runs (Tesseract install ordering, missing Qt libs in the GUI job, an eval-regres
 stale installer Source path masked by local build artifacts, the dead `gemini-2.5-flash` default, and a
 missing `permissions: contents: write` block) — full detail in `docs/DECISIONS.md`'s 2026-08-09/08-11
 entries. Automated rollback and the Windows-VM Docker variant remain explicit open items, not silently
-dropped. **Phase 15 (operational safety limits) is IN PROGRESS** — `operational_limits.py`'s three guards
-(cost/wall-clock/concurrency) are written, tested standalone, and wired into `orchestrator.py`/`config.py`/
-`main.py`/`worker.py`, but the actual success criterion (a real multi-hour stress run) has not been
-performed, and the new orchestrator-level wiring tests were only syntax-checked, not executed, when
-written. **Phase 16 (security review) is COMPLETE (2026-08-15)** — a fresh-eyes review found 7 findings,
+dropped. **Phase 15 (operational safety limits) has Python-level stability verified (2026-08-16)** —
+`operational_limits.py`'s three guards (cost/wall-clock/concurrency) are wired in, and
+`tests/brain/test_orchestrator_stress.py`/`src/observability/stress_runner.py` now actually run hundreds/
+thousands of back-to-back tasks (previously only syntax-checked) — found and fixed two real bugs (a
+trace-log filename collision, a missed cost check on an immediate "done" step). The real-hardware/
+real-browser half of the original success criterion (orphaned Chromium processes, real OS-level memory)
+remains open and still needs to run on real Windows hardware — see `docs/DECISIONS.md`'s 2026-08-16 entry. **Phase 16 (security review) is COMPLETE (2026-08-15)** — a fresh-eyes review found 7 findings,
 all triaged: 1 fixed immediately (local `detect-secrets` pre-commit hook), 1 scheduled into Phase 17
 (DPAPI's guarantee boundary), 4 accepted with reasoning recorded, 1 acknowledged as positive. `.env`'s
 plaintext credential storage remains a deliberately deferred, explicitly open gap (needs a Windows
@@ -45,6 +47,22 @@ that were deliberately NOT chased by tuning exemplar banks — doing so required
 cases' own wording to clear the similarity threshold, which the codebase's own docstring explicitly calls
 "cheating the eval." Score now 60% (29/48); CI floor lowered to 58% as a deliberate, documented decision
 (`docs/DECISIONS.md`, `eval/README.md`). Full non-GUI/GUI/integration suite reconfirmed green: 441/441.
+
+**Phase 15 stress testing built and actually run (2026-08-16).** `tests/brain/test_orchestrator_stress.py`
+(6 tests) and `src/observability/stress_runner.py` (standalone long-run CLI) drive hundreds/thousands of
+real back-to-back `run_task()` calls and check for Python-level resource leaks. Found and fixed two real
+bugs: a trace-log filename collision under same-second task starts, and a missed cost check on an
+immediate `"done"` step. A real 3000-iteration run: RSS grew 2.3MB (flat), zero thread/slot leaks, zero
+errors. **Still open, stated plainly:** this verifies Python-level resource management only — no real
+browser was launched, so the real-hardware/real-Chromium half of Phase 15's success criterion is
+unchanged and still needs to run on real Windows hardware. Full suite: 447/447 (441 non-GUI+GUI, 6
+integration).
+
+**Phase 18 scaffolding built (2026-08-16).** `src/observability/beta_report.py` (feedback/crash-report
+channel, built on Phase 17's `audit_export.py`, 10/10 tests passing), `docs/BETA_FINDINGS.md` (empty,
+append-only findings log), `docs/BETA_GUIDE.md` (tester instructions). **Not the same as Phase 18 itself**
+— the actual beta window (real users, real time) hasn't started; this just means the infrastructure exists
+and is tested ahead of it. Full suite now 457/457 (451 non-GUI+GUI, 6 integration).
 
 `config.py`'s `llm_model` default (found dead, 404-ing on `gemini-2.5-flash`, 2026-08-08) **has since been
 fixed at the source** — default and `.env.example` both now read `gemini-3.5-flash-lite`, confirmed GA.
@@ -105,6 +123,9 @@ roadmap order.
 | `src/observability/logger.py` | 1.5 (updated Phase 4, updated Phase 8, 2026-08-02) | Complete (LoopAudit + log_event, llm_call accuracy; `prune_old_logs()` day-based retention for trace logs/screenshots) |
 | `src/observability/trace_replay.py` | 5 (updated Phase 10, 2026-08-02) | Complete (`unclassified_or_missing_risk()` fixed — real bug found mining actual trace data, was flagging `done` steps and replan-retry noise as false gaps) |
 | `src/observability/audit_export.py` | Phase 17 (2026-08-16) | Complete — builds on `trace_replay.py`'s `TraceReplay`, collapses developer-trace log lines into one legible `AuditEntry` per settled step, renders a Markdown audit trail. 12/12 tests passing (actually run, not just syntax-checked). |
+| `src/observability/stress_runner.py` | Phase 15 (2026-08-16) | Complete for its synthetic/smoke-test scope — standalone long-run CLI, ships with fakes by default, real components documented to swap in for the actual hardware run (not yet done). Real 3000-iteration run: RSS +2.3MB, 0 leaks, 0 errors. |
+| `src/observability/beta_report.py` | Phase 18 (2026-08-16) | Complete — feedback/crash-report channel, builds on `audit_export.py`, screenshots opt-in only. 10/10 tests passing (actually run). |
+| `tests/brain/test_orchestrator_stress.py` | Phase 15 (2026-08-16) | Complete — 6 tests, 300 real back-to-back `run_task()` calls, all actually executed (not syntax-checked). Found and fixed 2 real bugs (see `docs/DECISIONS.md`). |
 | \`src/perception/ocr.py\` | 2.1 (updated 2026-08-01) | Complete (fixed real bug: `textord_min_linesize` config added — Tesseract's layout analysis was discarding solid-color button blocks as non-text before OCR ran) |
 | \`src/perception/element_detector.py\` | 2.1 | Complete |
 | \`src/perception/screen_diff.py\` | 2.1 | Complete |
@@ -180,12 +201,13 @@ live-wired): 73% overall. Neither satisfies the deployment gate in `eval/README.
 checklist.
 
 ## Next action
-1. **Phase 18 (field testing/beta)** is the only unstarted phase left in the deployment-readiness gate —
-   get real users (not the author) running real tasks over a real time window (`docs/PHASES.md` suggests
-   5-10 users, two weeks). Needs a feedback/crash-report channel and `docs/BETA_FINDINGS.md` set up first.
-2. Run a real multi-hour (or artificially-tightened-limit) stress test to close Phase 15's still-open
-   success criterion, and actually execute `tests/brain/test_orchestrator_operational_limits.py` for real
-   (only `py_compile`-checked so far).
+1. **Recruit and run the real Phase 18 beta window** — 5-10 real users, two weeks, per `docs/PHASES.md`.
+   The scaffolding (`beta_report.py`, `docs/BETA_FINDINGS.md`, `docs/BETA_GUIDE.md`) is built and tested
+   (2026-08-16); this is now genuinely a "find real people and run it" step, not an engineering task.
+2. **Run the real multi-hour stress run on real Windows hardware** — `src/observability/stress_runner.py`
+   is built and ready (`python -m src.observability.stress_runner --hours 4` after swapping in real
+   `HostedLLMPlanner`/`PlaywrightDriver`, per its own docstring); the Python-level half of Phase 15's
+   success criterion is now verified (2026-08-16), only the real-browser half remains.
 3. Longer-standing, unchanged: mine real corrections into Track B's training pipeline once enough live
    usage exists; confirm the desktop path from the installed build specifically, not just from source;
    revisit Phase 13 (nested-Windows-VM Docker) once `/dev/kvm`-capable infrastructure is available.
@@ -193,11 +215,12 @@ checklist.
    automated release rollback (Phase 14); a `LLM_MODEL` field in the `SetupWizard`.
 
 ---
-**Last updated:** 2026-08-16 (Phase 17 — legal & trust — implemented and complete. `TERMS.md`, `PRIVACY.md`,
-`docs/COMPLIANCE.md` written; `src/observability/audit_export.py` built and tested (12/12 passing for
-real). Full detail in `docs/DECISIONS.md`'s second 2026-08-16 entry. This closes every phase in the
-deployment-readiness gate except Phase 13 (on hold, infrastructure not available) and Phase 15 (wired but
-not yet stress-tested) — Phase 18 is the only phase left entirely unstarted.)
+**Last updated:** 2026-08-16 (Phase 18 scaffolding built and tested — `src/observability/beta_report.py`
+(10/10 tests passing), `docs/BETA_FINDINGS.md`, `docs/BETA_GUIDE.md`. See this file's Overall Progress
+section and `docs/DECISIONS.md`'s matching entry. Every phase through 18 now has either a met success
+criterion or built-and-tested scaffolding waiting on real users/hardware — Phase 13 (on hold), Phase 15's
+real-hardware half, and Phase 18's real beta window are the only three genuinely open items left, and none
+of them can be closed by further work in this environment alone.)
 
 ---
 *(All entries prior to 2026-08-08 are preserved unchanged below/above per this file's own history — see

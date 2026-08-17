@@ -1,0 +1,237 @@
+"""
+src/observability/stress_runner.py — Phase 15's real multi-hour stress run.
+
+Honest scope, same as tests/brain/test_orchestrator_stress.py (which this module
+is the long-running sibling of, not a duplicate): the CI-friendly pytest version
+runs ~300 fast synthetic iterations in seconds and catches Python-level resource
+leaks (thread/RSS/concurrency-slot growth, log-file collisions). It does NOT
+exercise real Playwright/Chromium or real OS-level mouse/keyboard, so it cannot
+by itself satisfy Phase 15's actual success criterion ("survives a multi-hour
+stress run... without a memory leak, orphaned process, or runaway cost").
+
+THIS module is what actually gets run for that real, multi-hour, real-hardware
+pass -- but it still ships with the same lightweight fakes as its default, so it
+can be smoke-tested anywhere (including this sandboxed environment) before ever
+being pointed at real components. To run the REAL stress test Phase 15 still
+needs:
+    1. On real Windows hardware, with a real Chromium/Playwright install.
+    2. Swap `_build_stress_orchestrator()`'s fake `planner`/`driver` below for
+       real ones (`HostedLLMPlanner`, `PlaywrightDriver` -- see src/main.py for
+       how those get constructed from config.py in normal operation).
+    3. Run for hours: `python -m src.observability.stress_runner --hours 4`.
+    4. Watch for real OS-level signals this module cannot see from Python alone
+       (orphaned `chrome.exe`/`chromedriver.exe` processes in Task Manager after
+       the run ends, actual system RAM climbing beyond what ru_maxrss reports,
+       GPU/handle exhaustion) -- these need a human watching the real machine,
+       not just this script's own numbers.
+
+Usage (synthetic/smoke-test mode, safe to run anywhere):
+    python -m src.observability.stress_runner --iterations 500
+    python -m src.observability.stress_runner --minutes 5
+
+Prints periodic progress and writes a JSON summary at the end.
+"""
+from __future__ import annotations
+
+import argparse
+import gc
+import json
+import resource
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from src.brain.orchestrator import Orchestrator
+from src.brain.risk_classifier import Risk
+from src.observability.logger import Logger, prune_old_logs
+from src.observability.operational_limits import (
+    OperationalLimitExceeded,
+    OperationalLimits,
+    TaskConcurrencyGuard,
+)
+
+
+def _build_stress_orchestrator(log_dir: Path, guard: TaskConcurrencyGuard) -> Orchestrator:
+    """Default fakes, same shape as tests/brain/test_orchestrator_stress.py.
+    Swap this out for real components (see this module's docstring) before a
+    real multi-hour hardware run -- left as fakes here so this script is
+    always safe to smoke-test in any environment, including one with no
+    Chromium/Gemini access at all."""
+    planner = MagicMock()
+    planner.next_step.side_effect = [{"action": "done"}]
+    planner.last_call_cost = 0.0001
+
+    driver = MagicMock()
+    driver.is_launched = False
+
+    action_router = MagicMock()
+    action_router.execute.return_value = {"status": "executed"}
+
+    gate = MagicMock()
+    logger = Logger(log_dir)
+
+    risk_classifier = MagicMock()
+    risk_classifier.classify_with_confidence.return_value = (Risk.LOCAL, True)
+    risk_classifier.needs_confirmation.return_value = False
+
+    return Orchestrator(
+        planner=planner,
+        driver=driver,
+        action_router=action_router,
+        gate=gate,
+        logger=logger,
+        max_steps=100,
+        risk_classifier=risk_classifier,
+        concurrency_guard=guard,
+        log_dir=log_dir,
+    )
+
+
+def run_stress(
+    log_root: Path,
+    iterations: int | None = None,
+    duration_seconds: float | None = None,
+    retention_days: int = 14,
+    progress_every: int = 50,
+) -> dict:
+    """Runs tasks back-to-back until either `iterations` is reached or
+    `duration_seconds` elapses (whichever is given -- if both are given,
+    stops at whichever comes first). Returns a summary dict, same one
+    written to the JSON file by _main() below.
+
+    Calls prune_old_logs() periodically, same as a real long-running process
+    would at natural checkpoints, rather than only once at startup -- a real
+    multi-hour run needs pruning to actually keep the log directory bounded
+    DURING the run, not just before it starts.
+    """
+    guard = TaskConcurrencyGuard(max_concurrent=1)
+    gc.collect()
+    rss_start_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    thread_start = threading.active_count()
+    start_time = time.monotonic()
+
+    completed = 0
+    limit_stops = 0
+    errors = 0
+    i = 0
+    while True:
+        if iterations is not None and i >= iterations:
+            break
+        if duration_seconds is not None and (time.monotonic() - start_time) >= duration_seconds:
+            break
+
+        orch = _build_stress_orchestrator(log_root, guard)
+        try:
+            result = orch.run_task(f"stress task {i}")
+            status = result.get("status")
+            if status == "operational_limit_exceeded":
+                limit_stops += 1
+            else:
+                completed += 1
+        except OperationalLimitExceeded:
+            limit_stops += 1
+        except Exception:  # noqa: BLE001 - a real stress run must keep going and report, not crash
+            errors += 1
+
+        if guard.active_count != 0:
+            # A leaked slot here means every subsequent task would fail --
+            # stop immediately rather than silently burning the rest of the
+            # run against a guard that's already broken.
+            print(
+                f"FATAL: concurrency slot leaked after iteration {i} "
+                f"(active_count={guard.active_count}) -- stopping early.",
+                file=sys.stderr,
+            )
+            break
+
+        i += 1
+        if i % progress_every == 0:
+            elapsed = time.monotonic() - start_time
+            gc.collect()
+            rss_now_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            print(
+                f"[{elapsed:8.1f}s] iter={i} completed={completed} "
+                f"limit_stops={limit_stops} errors={errors} "
+                f"rss={rss_now_kb / 1024:.1f}MB threads={threading.active_count()}"
+            )
+            prune_old_logs(log_root, retention_days)
+
+    gc.collect()
+    rss_end_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    thread_end = threading.active_count()
+    remaining_files = prune_old_logs(log_root, retention_days)
+
+    return {
+        "iterations_run": i,
+        "completed": completed,
+        "limit_stops": limit_stops,
+        "errors": errors,
+        "duration_seconds": time.monotonic() - start_time,
+        "rss_start_kb": rss_start_kb,
+        "rss_end_kb": rss_end_kb,
+        "rss_growth_kb": rss_end_kb - rss_start_kb,
+        "thread_count_start": thread_start,
+        "thread_count_end": thread_end,
+        "thread_leak": thread_end - thread_start,
+        "final_prune_deleted": remaining_files,
+        "concurrency_guard_clean": guard.active_count == 0,
+    }
+
+
+def _main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--iterations", type=int, default=None, help="Number of tasks to run.")
+    parser.add_argument("--minutes", type=float, default=None, help="Duration to run, in minutes.")
+    parser.add_argument("--hours", type=float, default=None, help="Duration to run, in hours.")
+    parser.add_argument(
+        "--log-dir", type=str, default=None,
+        help="Directory for real task logs during the run. Defaults to a temp dir "
+             "(smoke-test mode) -- pass a real path for an actual long run so the "
+             "logs survive after this process exits.",
+    )
+    parser.add_argument("--out", type=str, default="stress_run_summary.json")
+    args = parser.parse_args()
+
+    if args.iterations is None and args.minutes is None and args.hours is None:
+        args.iterations = 500  # sane smoke-test default
+
+    duration_seconds = None
+    if args.hours is not None:
+        duration_seconds = args.hours * 3600
+    elif args.minutes is not None:
+        duration_seconds = args.minutes * 60
+
+    if args.log_dir is not None:
+        log_root = Path(args.log_dir)
+        log_root.mkdir(parents=True, exist_ok=True)
+        tmp_ctx = None
+    else:
+        tmp_ctx = tempfile.TemporaryDirectory(prefix="pixel_stress_")
+        log_root = Path(tmp_ctx.name)
+
+    print(f"Starting stress run — log_dir={log_root}")
+    try:
+        summary = run_stress(log_root, iterations=args.iterations, duration_seconds=duration_seconds)
+    finally:
+        if tmp_ctx is not None:
+            tmp_ctx.cleanup()
+
+    print("\n=== Stress run summary ===")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+
+    Path(args.out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(f"\nSummary written to {args.out}")
+
+    ok = summary["concurrency_guard_clean"] and summary["errors"] == 0
+    if not ok:
+        print("\nFAIL: stress run surfaced an issue -- see summary above.", file=sys.stderr)
+        raise SystemExit(1)
+    print("\nOK: no leaks or errors detected by this script's own checks.")
+
+
+if __name__ == "__main__":
+    _main()

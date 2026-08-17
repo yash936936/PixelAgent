@@ -178,9 +178,23 @@ class Orchestrator:
 
                 if step["action"] == "done":
                     outcome_status = "done"
+                    done_cost = self._planner_cost()
+                    running_cost += done_cost
                     self._logger.log_step(
-                        step_num, step, {"status": "task_complete"}, llm_call=True, cost=self._planner_cost()
+                        step_num, step, {"status": "task_complete"}, llm_call=True, cost=done_cost
                     )
+                    # Phase 15 stress-testing fix (2026-08-16, docs/DECISIONS.md):
+                    # this "done" branch used to break out of the loop
+                    # immediately, before ever adding this step's own planner
+                    # cost to running_cost or calling cost.check() -- so a
+                    # task whose very first planning call was itself somehow
+                    # extremely expensive (a runaway prompt/context bug, not
+                    # just a slow one) hit no cost ceiling at all, since the
+                    # loop exited before the check that exists specifically to
+                    # catch that. Every other exit path already adds its
+                    # step's cost before checking; this makes "done" consistent
+                    # with that instead of being the one silent exception.
+                    limits_session.cost.check(running_cost)
                     break
 
                 try:

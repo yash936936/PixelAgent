@@ -452,14 +452,23 @@ both Docker variants); a bad release can be rolled back without manual intervent
 ---
 
 ## Phase 15 — Operational safety limits
-**Status: IN PROGRESS (2026-08-11).** `operational_limits.py` (`CostGuard`,
-`WallClockGuard`, `TaskConcurrencyGuard`, all raising a distinct
-`OperationalLimitExceeded`) is written and wired into `orchestrator.py`, `config.py`,
-`main.py`, and `worker.py` — code complete. **Not yet met:** the actual success
-criterion below needs a real multi-hour stress run on real hardware, which has not been
-performed; the new orchestrator-level wiring tests were only syntax-checked
-(`py_compile`), not actually executed, in the environment that wrote them. Full detail
-in `docs/DECISIONS.md`'s 2026-08-11 entries.
+**Status: PYTHON-LEVEL STABILITY VERIFIED (2026-08-16); REAL-HARDWARE RUN STILL
+OPEN.** `operational_limits.py` (`CostGuard`, `WallClockGuard`,
+`TaskConcurrencyGuard`) is wired into `orchestrator.py`/`config.py`/`main.py`/
+`worker.py`. **New as of 2026-08-16:** `tests/brain/test_orchestrator_stress.py`
+(6 tests, 300 back-to-back real `run_task()` calls) and
+`src/observability/stress_runner.py` (a standalone long-run CLI) were built and
+actually run — not just syntax-checked — including a real 3000-iteration smoke run
+(RSS growth 2.3MB, zero thread/slot leaks, zero errors). This found and fixed two
+real production bugs: a trace-log filename collision under same-second task starts
+(`logger.py`) and a missed cost check on an immediate `"done"` step
+(`orchestrator.py`) — see `docs/DECISIONS.md`'s 2026-08-16 entry for both.
+**Still genuinely open, unchanged by the above:** this verifies Python-level
+resource management only — no real Playwright/Chromium was launched, so the
+original success criterion's "orphaned process"/real browser-memory-leak concern
+is still unverified. `stress_runner.py` is built and ready for that real run
+(swap in real `HostedLLMPlanner`/`PlaywrightDriver`, run for hours on real
+Windows hardware) but has not itself been run against a real browser yet.
 
 | File | Description |
 |---|---|
@@ -470,6 +479,9 @@ in `docs/DECISIONS.md`'s 2026-08-11 entries.
 
 **Phase 15 success criterion:** the agent survives a multi-hour stress run (repeated tasks back-to-back)
 without a memory leak, orphaned process, or runaway cost, and self-terminates cleanly when a limit is hit.
+**Partially met (2026-08-16):** the "repeated tasks back-to-back," "self-terminates cleanly," and
+"no [Python-level] memory leak" parts are now verified by real, executed tests (see status note above).
+The real-browser "no orphaned process" part specifically still needs the real-hardware run.
 
 ---
 
@@ -520,15 +532,24 @@ rather than the raw multi-line-per-step developer trace format).
 ---
 
 ## Phase 18 — Field testing / beta
+**Status: SCAFFOLDING COMPLETE (2026-08-16); BETA WINDOW NOT YET STARTED.** The
+process itself (real users, real time window) hasn't happened — nothing substitutes
+for that. What's now built and tested: `src/observability/beta_report.py` (the
+feedback/crash-report channel, 10/10 tests passing) and `docs/BETA_FINDINGS.md`
+(the findings log), plus `docs/BETA_GUIDE.md` (tester-facing instructions). See
+`docs/DECISIONS.md`'s 2026-08-16 entry.
+
 | File | Description |
 |---|---|
 | *(process, not code)* | A small group of real users — people who are not the author, on hardware/configurations the author didn't set up — run this for real tasks over a real period of time. This is the only way to surface failure modes a single developer's supervised testing structurally cannot: unexpected site layouts, unusual DPI/monitor setups, edge-case account states. |
-| Feedback/crash-report channel (new) | Some way for beta users to report a failure with enough context (trace log excerpt) to be actionable, without exposing their full screenshot history. |
-| `docs/BETA_FINDINGS.md` (new) | Honest record of what broke during beta and what got fixed, same append-only spirit as `docs/DECISIONS.md`. |
+| `src/observability/beta_report.py` (new) | Some way for beta users to report a failure with enough context (trace log excerpt) to be actionable, without exposing their full screenshot history. Built on `audit_export.py` (Phase 17); screenshots opt-in only, never a full log-dir dump. |
+| `docs/BETA_FINDINGS.md` (new) | Honest record of what broke during beta and what got fixed, same append-only spirit as `docs/DECISIONS.md`. Empty until real beta findings come in. |
+| `docs/BETA_GUIDE.md` (new) | Tester-facing instructions — what to expect, how to report something, using `beta_report.py`. |
 
 **Phase 18 success criterion:** a defined number of beta users (even just 5–10) complete real tasks across a
 real time window (e.g. two weeks) with no unrecoverable failures and no unrecovered-from safety-boundary
-miss.
+miss. **Not yet met** — this needs real people and real time, which no amount of further scaffolding can
+substitute for.
 
 ---
 

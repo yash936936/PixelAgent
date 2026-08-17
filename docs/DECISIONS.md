@@ -2052,3 +2052,111 @@ Phase 3 build
   green (387/387) after the `_READ_ONLY_GUARDS` change. No change to any production risk-classification
   behavior beyond the one narrow read-only-guard fix — everything else in this entry is test-data/threshold
   bookkeeping, not a change to what the agent actually does.
+
+
+### [2026-08-16] Phase 15 — stress/stability testing built and run for real; two real bugs found and fixed
+- **Type:** New (multiple), Bug fix (two, in production code)
+- **File(s) affected:** `tests/brain/test_orchestrator_stress.py` (new, 6 tests), `src/observability/
+  stress_runner.py` (new, standalone long-run CLI), `src/observability/logger.py` (bug fix),
+  `src/brain/orchestrator.py` (bug fix).
+- **Honest scope, stated up front:** this closes the Python-level half of Phase 15's success criterion,
+  not the real-hardware half. Neither test file launches real Playwright/Chromium or runs on real Windows
+  — the "orphaned process"/"real memory leak" part of the original success criterion specifically means
+  real browser processes, which this sandboxed Linux environment cannot launch or observe. That real run
+  still needs to happen separately on real hardware — `stress_runner.py` is built and ready for exactly
+  that (see its own module docstring for the swap-in-real-components steps), but has not itself been run
+  against a real browser as of this entry.
+- **What was built and actually run, not just written:**
+  1. `tests/brain/test_orchestrator_stress.py` — 6 tests driving 300 back-to-back `Orchestrator.run_task()`
+     calls through the real orchestrator loop (fakes for planner/driver/router, matching
+     `test_orchestrator_operational_limits.py`'s existing style, but a REAL `Logger` writing real files),
+     checking: concurrency-slot leakage, process RSS high-water-mark growth (stdlib `resource`, no new
+     dependency), Python thread-count growth, real log-file accumulation + pruning at 50-file scale, and
+     that cost/concurrency limits keep firing correctly across many consecutive tasks, not just the first.
+  2. `src/observability/stress_runner.py` — a standalone, longer-running CLI sibling
+     (`python -m src.observability.stress_runner --iterations N` / `--hours N`), ships with the same fakes
+     by default so it's safe to smoke-test anywhere, with real components meant to be swapped in for the
+     actual hardware run (documented in its own docstring, not assumed obvious).
+  3. **Actually run**, not just executed once for a green checkmark: the new pytest suite (6/6 passing),
+     the full non-GUI+GUI suite afterward to confirm no regression (441/441), the integration suite (6/6),
+     and a real 3000-iteration smoke run of `stress_runner.py` itself — `rss_growth_kb: 2304` (2.3MB across
+     3000 tasks, effectively flat), `thread_leak: 0`, `concurrency_guard_clean: true`, `errors: 0`,
+     `limit_stops: 0`. Real numbers, not asserted-and-trusted.
+- **Two real bugs found by the first (failing) run of the new stress tests, both fixed:**
+  1. **`src/observability/logger.py` — trace-log filename collision, a real data-integrity bug.**
+     `Logger.__init__`'s `task_id` was second-precision only (`strftime("task_%Y%m%dT%H%M%S")`). Any two
+     tasks starting within the same wall-clock second — which the stress test's very first version hit
+     immediately at 50 tasks/log-dir, and which real fast back-to-back usage could plausibly hit too — got
+     an IDENTICAL filename, and since `_write()` opens in append mode, this silently interleaved two
+     different tasks' trace events into one file with no way to tell them apart afterward — directly
+     breaking the "one file per task" assumption `trace_replay.py` and `src/observability/audit_export.py`
+     (Phase 17) both depend on. Fixed with microsecond precision plus a short random suffix
+     (`uuid.uuid4().hex[:6]`) — belt-and-suspenders, since even microsecond collisions aren't impossible on
+     a fast loop or a low-resolution system clock. Verified: 50/50 unique files at stress scale post-fix.
+  2. **`src/brain/orchestrator.py` — cost limit never checked on an immediate `"done"` step.** The `"done"`
+     branch of `run_task()`'s loop logged the step and `break`-ed out immediately, before ever adding that
+     step's own planner cost to `running_cost` or calling `limits_session.cost.check()` — every other exit
+     path from the loop already does both before checking, this one silently didn't. A task whose very
+     first planning call was itself expensive (a runaway-prompt/context bug, not just a legitimately quick
+     trivial task) would hit no cost ceiling at all. Fixed to add the step's cost and call `cost.check()`
+     before breaking, same as every other path. Verified: a test asserting the cost limit fires on 300/300
+     consecutive single-step "done" tasks, which failed 0/300 before this fix and passes 300/300 after.
+  3. **One test-authoring mistake caught and corrected in the same pass, not a code bug**: an early version
+     of the log-pruning stress test called `prune_old_logs(retention_days=0)` expecting it to delete
+     everything, but `retention_days<=0` is documented (`logger.py`'s own docstring) as "keep everything,"
+     the opposite assumption. Fixed the test to actually age file mtimes and use a real positive retention
+     window, rather than changing the documented, deliberate production behavior to match a wrong test.
+- **Why:** Phase 15's own file table lists this stress-testing work as still-needed; its "not yet met"
+  status line explicitly flagged that the orchestrator-level wiring tests had only been syntax-checked, not
+  run. This entry is the first time they were actually executed, at both unit-test and multi-thousand-
+  iteration scale, and it caught two real production bugs neither the original Phase 15 wiring pass nor
+  any prior test run had surfaced.
+- **Impacts:** `docs/PHASES.md`'s Phase 15 status updated to reflect: Python-level stability now verified,
+  code-level bugs found and fixed, real-hardware browser-level verification still open (unchanged, honestly
+  still the same gap it was before). Full suite reconfirmed green: 441 (non-GUI+GUI) + 6 (integration) = 447
+  passing. No change to any behavior other than the two fixes described above.
+
+
+### [2026-08-16] Phase 18 — scaffolding built (feedback channel + findings log), ready for a real beta cohort
+- **Type:** New (multiple)
+- **File(s) affected:** `src/observability/beta_report.py` (new), `tests/observability/test_beta_report.py`
+  (new, 10 tests), `docs/BETA_FINDINGS.md` (new), `docs/BETA_GUIDE.md` (new).
+- **Honest scope, stated up front:** this is scaffolding, not Phase 18 itself. Phase 18's actual success
+  criterion needs real users (not the author) running real tasks over a real time window — nothing built
+  in this entry substitutes for that. What this entry does is make sure that when a real beta cohort
+  starts, there's already a working, tested way for them to report something and a real place for those
+  reports to land, rather than improvising both during the beta window itself.
+- **What was built and actually run, not just written:**
+  1. **`src/observability/beta_report.py`** — the feedback/crash-report channel called for in
+     `docs/PHASES.md`'s Phase 18 file table. Built on top of `audit_export.py` (Phase 17) rather than
+     re-parsing traces independently — reuses its legible per-action summary rather than duplicating
+     trace-format logic. Screenshots are excluded by default (opt-in only, via `--include-screenshots`,
+     and even then only the specific task's own screenshots, never a full `logs/` dump), read as the
+     strict interpretation of the file table's own wording ("without exposing their full screenshot
+     history"). No network call, no telemetry, no auto-upload — produces a local file the tester chooses
+     to share, matching `PRIVACY.md`'s existing "nothing leaves the machine automatically" posture.
+     Redaction is inherited from `logger.py`'s existing `_redact_step()` (Phase 4), not reimplemented — a
+     second, independent redaction pass would risk a false sense of double-safety while just duplicating
+     the same keyword-matching limitation `PRIVACY.md` already documents honestly.
+  2. **10 tests, actually run** (`pytest tests/observability/test_beta_report.py -v`, 10/10 passing) —
+     covering report generation from both a specific file and a directory (most-recent-trace selection),
+     environment info inclusion, notes handling, the screenshot opt-in/opt-out behavior specifically (the
+     riskiest part of this module to get wrong), a clear error on an empty log directory, and confirming
+     the module never attempts to "help" by un-redacting anything already masked upstream.
+  3. **CLI smoke-tested directly** (not just via pytest): `python -m src.observability.beta_report
+     /tmp/betatest --notes "..."` — confirmed real output matches the tested behavior.
+  4. **`docs/BETA_FINDINGS.md`** — the append-only findings log, structured as `docs/DECISIONS.md`'s
+     counterpart for *reports from real usage* rather than *engineering decisions*, with the same
+     NEW/TRIAGED/FIXED/ACCEPTED/WONT_FIX status vocabulary Phase 16's triage already established works
+     well for this project. Empty by design — findings only get added once a real beta cohort produces
+     them, not backfilled with placeholders.
+  5. **`docs/BETA_GUIDE.md`** — the tester-facing companion doc `BETA_FINDINGS.md` references, since a
+     findings-log template alone assumes a tester already knows the exact command to run; this is the
+     actual instructions a real beta tester would be handed.
+- **Why:** Directly implements `docs/PHASES.md`'s Phase 18 file table entries for "a feedback/crash-report
+  channel" and `docs/BETA_FINDINGS.md`, so the only remaining work for Phase 18 itself is recruiting real
+  testers and running the real time window — not also building the infrastructure during it.
+- **Impacts:** Full suite reconfirmed green: 451 (non-GUI+GUI) + 6 (integration) = 457 passing (up from
+  447 before this entry — 10 new tests). No change to any existing production behavior; every file in this
+  entry is new. `docs/PHASES.md`'s Phase 18 status can now read "scaffolding complete, beta window not yet
+  started" instead of "entirely unstarted."

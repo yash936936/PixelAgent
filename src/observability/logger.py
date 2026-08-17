@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,7 +124,21 @@ class Logger:
     def __init__(self, log_dir: Path) -> None:
         self._log_dir = log_dir
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._task_id = datetime.now(timezone.utc).strftime("task_%Y%m%dT%H%M%S")
+        # Phase 15 stress-testing fix (2026-08-16, docs/DECISIONS.md): the
+        # task_id used to be second-precision only
+        # (strftime("task_%Y%m%dT%H%M%S")). Any two tasks starting within the
+        # same wall-clock second -- which a real stress run of many
+        # back-to-back short tasks hits constantly, and which even normal use
+        # could hit if a user queues tasks quickly -- got IDENTICAL filenames.
+        # Since _write() opens in append mode, this silently interleaved two
+        # different tasks' trace events into one file with no way to tell
+        # them apart after the fact, and directly broke the "one file per
+        # task" assumption trace_replay.py/audit_export.py both depend on.
+        # Fixed by adding microsecond precision plus a short random suffix
+        # (belt-and-suspenders -- microsecond collisions are rare but not
+        # impossible on a fast enough loop or a low-resolution system clock).
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        self._task_id = f"task_{timestamp}_{uuid.uuid4().hex[:6]}"
         self._log_path = self._log_dir / f"{self._task_id}.jsonl"
         self.audit = LoopAudit()
 
