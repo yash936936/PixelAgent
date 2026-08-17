@@ -77,21 +77,22 @@ def _current_rss_kb() -> int:
         ru_maxrss. This is a real, meaningful difference (see this function's
         callers) but still catches the thing that matters: memory that never
         comes back down across many iterations.
+
+    Second real bug found live on Windows (2026-08-17, docs/DECISIONS.md):
+    the first version of the Windows branch called GetCurrentProcess() and
+    GetProcessMemoryInfo() with no argtypes/restype declared. ctypes
+    defaults undeclared return values to a 32-bit c_int -- so
+    GetCurrentProcess()'s real return value (a 64-bit pseudo-handle,
+    -1 / 0xFFFFFFFFFFFFFFFF on Win64) got silently truncated to a 32-bit
+    value before ever reaching GetProcessMemoryInfo(), which then failed
+    outright (returned 0/FALSE) on a corrupted handle. Fixed by declaring
+    explicit argtypes/restype using ctypes.wintypes, the actual documented
+    fix ctypes' own docs call for when calling any WinAPI function -- not
+    optional boilerplate.
     """
     if sys.platform == "win32":
         import ctypes.wintypes as wintypes
 
-        # Real bug #2 found live on Windows (2026-08-17, docs/DECISIONS.md):
-        # the first version of this branch called GetCurrentProcess() and
-        # GetProcessMemoryInfo() with no argtypes/restype declared. ctypes
-        # defaults undeclared return values to a 32-bit c_int -- so
-        # GetCurrentProcess()'s real return value (a 64-bit pseudo-handle,
-        # -1 / 0xFFFFFFFFFFFFFFFF on Win64) got silently truncated to a
-        # 32-bit value before ever reaching GetProcessMemoryInfo(), which
-        # then failed outright (returned 0/FALSE) on a corrupted handle.
-        # Fixed by declaring explicit argtypes/restype using
-        # ctypes.wintypes, which is the actual fix ctypes' own docs call
-        # for when calling any WinAPI function -- not optional boilerplate.
         kernel32 = ctypes.windll.kernel32
         psapi = ctypes.windll.psapi
 

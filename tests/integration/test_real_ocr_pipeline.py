@@ -14,9 +14,9 @@ import io
 from PIL import Image
 
 from src.perception.element_detector import detect_regions, find_relevant_regions
-from src.perception.ocr import OCREngine
 
 from .conftest import fixture_url
+from tests._ocr_test_support import real_ocr_engine
 
 
 def _screenshot_to_image(page) -> Image.Image:
@@ -28,7 +28,7 @@ def test_real_ocr_finds_submit_button_text(page):
     page.goto(fixture_url("button.html"))
     image = _screenshot_to_image(page)
 
-    words = OCREngine().read(image)
+    words = real_ocr_engine().read(image)
     texts = [w.text for w in words]
 
     assert "Submit" in texts, f"Tesseract did not find 'Submit' among: {texts}"
@@ -42,7 +42,7 @@ def test_real_ocr_pipeline_locates_clickable_submit_region(page):
     page.goto(fixture_url("button.html"))
     image = _screenshot_to_image(page)
 
-    words = OCREngine().read(image)
+    words = real_ocr_engine().read(image)
     regions = detect_regions(words)
     matches = find_relevant_regions(regions, ["submit"])
 
@@ -69,7 +69,7 @@ def test_real_ocr_pipeline_username_field_classified_as_field(page):
     page.goto(fixture_url("button.html"))
     image = _screenshot_to_image(page)
 
-    words = OCREngine().read(image)
+    words = real_ocr_engine().read(image)
     regions = detect_regions(words)
     field_regions = [r for r in regions if r.kind == "field"]
 

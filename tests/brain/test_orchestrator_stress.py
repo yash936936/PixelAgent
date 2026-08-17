@@ -246,8 +246,6 @@ class TestCrossPlatformCompatibility:
         """Doesn't assume which platform this runs on -- just confirms
         _current_rss_kb() actually returns a real, positive number here,
         whatever this environment happens to be."""
-        from src.observability.stress_runner import _current_rss_kb
-
         rss = _current_rss_kb()
         assert isinstance(rss, int)
         assert rss > 0

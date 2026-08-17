@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.doctor import (
     CheckResult,
     check_config,
@@ -13,6 +15,31 @@ from src.doctor import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _restore_pytesseract_tesseract_cmd():
+    """Real test-isolation bug found live on Windows (2026-08-17,
+    docs/DECISIONS.md): check_tesseract(tesseract_cmd=...) (src/doctor.py)
+    sets `pytesseract.pytesseract.tesseract_cmd` -- a module-level global in
+    the third-party pytesseract library itself, not something scoped to
+    this test file -- and nothing here ever restored it afterward. A test
+    below that deliberately passes a wrong path
+    (test_check_tesseract_reports_helpful_hint_when_explicit_cmd_is_wrong)
+    left that wrong path sitting in pytesseract's global state for the rest
+    of the pytest session, which then silently broke
+    tests/perception/test_ocr_solid_background_regression.py's real-Tesseract
+    tests if they happened to run afterward in the same process -- a classic
+    test-pollution bug, invisible when this file is run alone (as it was
+    when originally written) and only surfacing once the full suite ran
+    together. Fixed with this autouse fixture: snapshot the real value
+    before each test in this file, restore it after, regardless of what any
+    individual test mutates it to."""
+    import pytesseract
+
+    original = pytesseract.pytesseract.tesseract_cmd
+    yield
+    pytesseract.pytesseract.tesseract_cmd = original
+
+
 def test_check_config_passes_with_valid_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("PROFILES_DIR", str(tmp_path / "profiles"))
@@ -23,6 +50,23 @@ def test_check_config_passes_with_valid_env(monkeypatch, tmp_path):
 
 
 def test_check_config_fails_without_api_key(monkeypatch):
+    """Real bug found live on Windows (2026-08-17, docs/DECISIONS.md):
+    monkeypatch.delenv() alone only removes GEMINI_API_KEY from os.environ
+    at the moment this test runs -- but config.load() calls load_dotenv()
+    internally, which RE-reads a real .env file from disk (searching the
+    current/parent directories) and re-populates os.environ from it. On
+    this project's own Linux CI there's typically no real .env file
+    present, so the original version of this test happened to work there;
+    on the user's real Windows dev machine, a real .env with a real
+    GEMINI_API_KEY exists (as it must, for the agent to function at all),
+    so load_dotenv() silently undid the delenv() before check_config() ever
+    ran, and the test's "fails without API key" scenario could never
+    actually be constructed. Fixed by also patching load_dotenv itself to a
+    no-op for this test, so the deleted env var stays deleted regardless of
+    what real .env file exists on the machine running this suite."""
+    import src.config as config_module
+
+    monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **kw: None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     result = check_config()
     assert not result.passed
@@ -108,14 +152,39 @@ def test_check_semantic_layer_passes():
     assert "SemanticRiskJudge" in result.detail
 
 
-def test_check_encryption_at_rest_reports_unavailable_in_this_environment():
-    """This build/test environment is Linux -- pywin32 genuinely isn't
-    installed, so this should report unavailable (optional, never
-    blocking) without any mocking at all."""
+def test_check_encryption_at_rest_reports_unavailable_when_pywin32_missing(monkeypatch):
+    """Real bug found live on Windows (2026-08-17, docs/DECISIONS.md): the
+    original version of this test asserted "unavailable" on the bare claim
+    that pywin32 isn't installed in this environment -- true on this
+    project's Linux CI, false on the real Windows machine this project
+    targets, where pywin32 is genuinely installed (Phase 8's whole point)
+    and encryption is correctly reported as available. That was correct
+    behavior being flagged as a failure. Fixed the same way as
+    tests/security/test_at_rest.py's equivalent fix: force the "pywin32 not
+    installed" condition deterministically via sys.modules rather than
+    relying on ambient environment truth, so this test checks the same real
+    code path on every platform."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "win32crypt", None)
     result = check_encryption_at_rest()
     assert result.optional is True
     assert result.passed is False
     assert "pywin32" in result.detail
+
+
+def test_check_encryption_at_rest_reports_available_when_pywin32_present(monkeypatch):
+    """The counterpart to the test above -- added 2026-08-17 alongside the
+    fix, since the "available" path (the actual real-Windows outcome this
+    project cares about) had no test of its own before this."""
+    import sys
+    from unittest.mock import MagicMock
+
+    monkeypatch.setitem(sys.modules, "win32crypt", MagicMock())
+    result = check_encryption_at_rest()
+    assert result.optional is True
+    assert result.passed is True
+    assert "encrypted" in result.detail
 
 
 def test_run_diagnostics_returns_a_result_for_every_check(monkeypatch, tmp_path):

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw
 
-from src.perception.ocr import OCREngine
+from tests._ocr_test_support import real_ocr_engine
 
 
 def _solid_button_image(text: str = "Submit") -> Image.Image:
@@ -30,7 +30,7 @@ def _solid_button_image(text: str = "Submit") -> Image.Image:
 
 
 def test_ocr_finds_text_inside_a_solid_color_button():
-    words = OCREngine().read(_solid_button_image())
+    words = real_ocr_engine().read(_solid_button_image())
     texts = [w.text for w in words]
     assert any("Submit" in t or "submit" in t.lower() for t in texts), (
         f"OCREngine failed to read text inside a solid-color button block, got: {texts} -- "
@@ -44,6 +44,6 @@ def test_ocr_still_finds_plain_text_on_white_background():
     draw = ImageDraw.Draw(img)
     draw.text((10, 10), "Username", fill="black")
 
-    words = OCREngine().read(img)
+    words = real_ocr_engine().read(img)
     texts = [w.text for w in words]
     assert any("Username" in t for t in texts)

@@ -18,28 +18,49 @@ def _reset_warned_once_flag():
 
 
 def test_is_available_false_when_pywin32_not_installed(monkeypatch):
-    """This build/test environment is Linux -- pywin32 genuinely isn't
-    installed, so this should be false without any mocking at all."""
+    """Forces the "pywin32 not installed" path deterministically rather
+    than assuming ambient environment truth. Real bug found live
+    (2026-08-17, docs/DECISIONS.md): this test originally asserted
+    `is_available() is False` on the bare claim that "this environment is
+    Linux, pywin32 genuinely isn't installed" -- true in this project's own
+    Linux CI, but false the moment this suite actually ran on the real
+    Windows machine it's meant to support, where pywin32 IS installed (by
+    design -- see docs/PHASES.md Phase 8) and is_available() correctly
+    returns True. That was correct behavior being flagged as a test
+    failure, not a real bug. Fixed to force the "not installed" condition
+    via sys.modules (setting the entry to None makes `import win32crypt`
+    raise ImportError, the standard technique for this), so this test
+    verifies the same real code path -- is_available()'s except ImportError
+    branch -- on every platform, deterministically, rather than depending
+    on what happens to be installed on whatever machine runs it."""
+    monkeypatch.setitem(sys.modules, "win32crypt", None)
     assert at_rest.is_available() is False
 
 
-def test_protect_falls_back_to_plaintext_when_unavailable(capsys):
-    """Real degradation path exercised for real in this environment (no
-    mocking needed) -- pywin32 isn't installed here."""
+def test_protect_falls_back_to_plaintext_when_unavailable(monkeypatch, capsys):
+    """Forces the unavailable path the same way as the test above --
+    real bug found live (2026-08-17): the original version relied on
+    pywin32 genuinely being absent, which doesn't hold on the real Windows
+    machine this project targets."""
+    monkeypatch.setitem(sys.modules, "win32crypt", None)
     result = at_rest.protect("sensitive task instruction")
     assert result == "sensitive task instruction"
     captured = capsys.readouterr()
     assert "DPAPI is unavailable" in captured.out
 
 
-def test_protect_warns_only_once(capsys):
+def test_protect_warns_only_once(monkeypatch, capsys):
+    """Same fix as the two tests above -- forces the unavailable path
+    deterministically instead of assuming pywin32 is absent."""
+    monkeypatch.setitem(sys.modules, "win32crypt", None)
     at_rest.protect("first")
     at_rest.protect("second")
     captured = capsys.readouterr()
     assert captured.out.count("DPAPI is unavailable") == 1
 
 
-def test_unprotect_falls_back_to_returning_input_when_unavailable():
+def test_unprotect_falls_back_to_returning_input_when_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "win32crypt", None)
     assert at_rest.unprotect("some stored value") == "some stored value"
 
 

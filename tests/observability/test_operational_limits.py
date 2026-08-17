@@ -42,9 +42,18 @@ class TestWallClockGuard:
         assert guard.elapsed_seconds == 0.0
 
     def test_elapsed_seconds_after_start_increases(self):
+        """Real bug found live on Windows (2026-08-17, docs/DECISIONS.md):
+        this test originally slept 0.01s (10ms), which is right at the edge
+        of Windows' default system timer resolution (~15.6ms) -- under real
+        machine load, a 10ms sleep can round down to effectively 0 elapsed
+        wall-clock time on Windows, making this assertion genuinely flaky
+        rather than actually catching a bug in WallClockGuard itself (which
+        already correctly uses time.monotonic()). Bumped to 0.05s -- well
+        above that worst-case granularity -- to keep this test robust across
+        platforms without weakening what it actually checks."""
         guard = WallClockGuard(max_seconds=10.0)
         guard.start()
-        time.sleep(0.01)
+        time.sleep(0.05)
         assert guard.elapsed_seconds > 0.0
 
 
