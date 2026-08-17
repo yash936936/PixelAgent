@@ -34,9 +34,9 @@ Prints periodic progress and writes a JSON summary at the end.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import gc
 import json
-import resource
 import sys
 import tempfile
 import threading
@@ -52,6 +52,93 @@ from src.observability.operational_limits import (
     OperationalLimits,
     TaskConcurrencyGuard,
 )
+
+
+def _current_rss_kb() -> int:
+    """Cross-platform current process RSS in KB.
+
+    Real bug found live (2026-08-17, docs/DECISIONS.md): the original version
+    of this module used the stdlib `resource` module directly, which is
+    POSIX-only -- it doesn't exist on Windows at all, so `import resource`
+    crashed immediately on the actual target platform this whole project is
+    built for, before a single stress iteration ever ran. Never caught here
+    because this sandboxed dev environment is Linux; only surfaced once this
+    module was actually run on real Windows hardware, exactly the kind of gap
+    this stress run exists to catch, just one level earlier than intended.
+
+    Fixed with a real per-platform implementation rather than adding a new
+    pip dependency (e.g. psutil) for one figure:
+      - POSIX (Linux/macOS): `resource.getrusage(RUSAGE_SELF).ru_maxrss`,
+        imported lazily inside this branch so the module still loads cleanly
+        on Windows, where the import itself would fail.
+      - Windows: `GetProcessMemoryInfo` via `ctypes` against `psapi.dll`,
+        stdlib-only, no extra dependency -- returns the current working set
+        size (current resident memory), not a high-water mark like POSIX's
+        ru_maxrss. This is a real, meaningful difference (see this function's
+        callers) but still catches the thing that matters: memory that never
+        comes back down across many iterations.
+    """
+    if sys.platform == "win32":
+        import ctypes.wintypes as wintypes
+
+        # Real bug #2 found live on Windows (2026-08-17, docs/DECISIONS.md):
+        # the first version of this branch called GetCurrentProcess() and
+        # GetProcessMemoryInfo() with no argtypes/restype declared. ctypes
+        # defaults undeclared return values to a 32-bit c_int -- so
+        # GetCurrentProcess()'s real return value (a 64-bit pseudo-handle,
+        # -1 / 0xFFFFFFFFFFFFFFFF on Win64) got silently truncated to a
+        # 32-bit value before ever reaching GetProcessMemoryInfo(), which
+        # then failed outright (returned 0/FALSE) on a corrupted handle.
+        # Fixed by declaring explicit argtypes/restype using
+        # ctypes.wintypes, which is the actual fix ctypes' own docs call
+        # for when calling any WinAPI function -- not optional boilerplate.
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetCurrentProcess.argtypes = []
+
+        # PROCESS_MEMORY_COUNTERS.WorkingSetSize, in bytes -- current, not
+        # peak. GetCurrentProcess() returns a pseudo-handle valid for the
+        # calling process, no CloseHandle needed per Win32 docs.
+        class _ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ProcessMemoryCounters),
+            wintypes.DWORD,
+        ]
+
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(_ProcessMemoryCounters)
+        handle = kernel32.GetCurrentProcess()
+        ok = psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+        if not ok:
+            # ctypes.WinError() (not ctypes.get_last_error(), which needs
+            # use_last_error=True at DLL-load time to be reliable, unset
+            # here since ctypes.windll doesn't set it) -- WinError() calls
+            # the real Win32 GetLastError() itself and raises an OSError
+            # with Windows' own real error message, which is far more
+            # actionable than a bare "failed" string.
+            raise ctypes.WinError()
+        return counters.WorkingSetSize // 1024
+
+    import resource  # POSIX-only; safe here since sys.platform != "win32"
+
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
 
 def _build_stress_orchestrator(log_dir: Path, guard: TaskConcurrencyGuard) -> Orchestrator:
@@ -109,7 +196,7 @@ def run_stress(
     """
     guard = TaskConcurrencyGuard(max_concurrent=1)
     gc.collect()
-    rss_start_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    rss_start_kb = _current_rss_kb()
     thread_start = threading.active_count()
     start_time = time.monotonic()
 
@@ -151,7 +238,7 @@ def run_stress(
         if i % progress_every == 0:
             elapsed = time.monotonic() - start_time
             gc.collect()
-            rss_now_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            rss_now_kb = _current_rss_kb()
             print(
                 f"[{elapsed:8.1f}s] iter={i} completed={completed} "
                 f"limit_stops={limit_stops} errors={errors} "
@@ -160,7 +247,7 @@ def run_stress(
             prune_old_logs(log_root, retention_days)
 
     gc.collect()
-    rss_end_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    rss_end_kb = _current_rss_kb()
     thread_end = threading.active_count()
     remaining_files = prune_old_logs(log_root, retention_days)
 

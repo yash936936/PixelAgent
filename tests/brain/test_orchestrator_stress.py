@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import gc
 import itertools
-import resource
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -45,6 +44,7 @@ from src.observability.operational_limits import (
     OperationalLimits,
     TaskConcurrencyGuard,
 )
+from src.observability.stress_runner import _current_rss_kb
 
 # Kept modest enough to run in a normal CI job (seconds, not the real multi-hour
 # run) while still being large enough to surface a genuine per-iteration leak --
@@ -124,14 +124,18 @@ class TestRepeatedTaskStability:
             )
 
     def test_process_rss_does_not_grow_unbounded_across_many_tasks(self, tmp_path):
-        """Coarse but real: samples this process's own max resident set size
-        (ru_maxrss, stdlib `resource` -- no psutil dependency needed) before
-        and after a batch of tasks. ru_maxrss is a high-water mark, not a
-        live reading, so this can't catch a leak that peaks and is later
-        reclaimed -- it catches the class of bug that matters most for a
-        long-running desktop agent: memory that never comes back down."""
+        """Coarse but real: samples this process's current RSS via
+        stress_runner.py's cross-platform _current_rss_kb() (POSIX:
+        resource.getrusage's ru_maxrss high-water mark; Windows:
+        GetProcessMemoryInfo's current WorkingSetSize -- see that function's
+        own docstring for why these differ and why that's still meaningful
+        here) before and after a batch of tasks. Not a live/instantaneous
+        reading on POSIX (a high-water mark), so this can't catch a leak
+        that peaks and is later reclaimed there -- it catches the class of
+        bug that matters most for a long-running desktop agent: memory that
+        never comes back down."""
         gc.collect()
-        rss_before_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_before_kb = _current_rss_kb()
 
         guard = TaskConcurrencyGuard(max_concurrent=1)
         for i in range(_STRESS_ITERATIONS):
@@ -139,12 +143,13 @@ class TestRepeatedTaskStability:
             orch.run_task(f"rss stress task {i}")
 
         gc.collect()
-        rss_after_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_after_kb = _current_rss_kb()
 
-        # High-water-mark growth across 300 trivial single-step tasks should
-        # be small -- generous 150MB ceiling (not a tight bound) since
-        # ru_maxrss is platform-sensitive and this test's job is to catch a
-        # real runaway leak (unbounded growth), not to pin an exact number.
+        # Growth across 300 trivial single-step tasks should be small --
+        # generous 150MB ceiling (not a tight bound) since the underlying
+        # reading is platform-sensitive (see _current_rss_kb()'s docstring)
+        # and this test's job is to catch a real runaway leak (unbounded
+        # growth), not to pin an exact number.
         growth_kb = rss_after_kb - rss_before_kb
         assert growth_kb < 150_000, (
             f"process RSS high-water mark grew by {growth_kb / 1024:.1f}MB across "
@@ -210,6 +215,42 @@ class TestRepeatedTaskStability:
         deleted = prune_old_logs(log_dir, retention_days=14)
         assert deleted == n, f"expected prune_old_logs to remove all {n} files, removed {deleted}"
         assert list(log_dir.glob("task_*.jsonl")) == []
+
+
+class TestCrossPlatformCompatibility:
+    """Real bug found live on Windows (2026-08-17, docs/DECISIONS.md): this
+    module originally `import resource`-ed unconditionally at module load
+    time, which crashed immediately on Windows (resource is POSIX-only) --
+    before a single stress iteration ever ran, and never caught in this
+    sandboxed Linux dev environment. These tests exist so a future
+    regression of the same shape (an accidentally POSIX-only import creeping
+    back into this module) fails loudly here, on the platform that catches
+    it fastest, rather than only being found again on real Windows hardware."""
+
+    def test_stress_runner_module_has_no_unconditional_resource_import(self):
+        import inspect
+
+        import src.observability.stress_runner as stress_runner_module
+
+        source = inspect.getsource(stress_runner_module)
+        # The only acceptable "import resource" is the lazy, POSIX-branch-only
+        # one inside _current_rss_kb() itself -- never at module top level.
+        top_level_source = source.split("def _current_rss_kb")[0]
+        assert "import resource" not in top_level_source, (
+            "stress_runner.py must not import the POSIX-only `resource` module "
+            "at module load time -- this crashes immediately on Windows, the "
+            "actual target platform for this whole project."
+        )
+
+    def test_current_rss_kb_works_on_this_platform(self):
+        """Doesn't assume which platform this runs on -- just confirms
+        _current_rss_kb() actually returns a real, positive number here,
+        whatever this environment happens to be."""
+        from src.observability.stress_runner import _current_rss_kb
+
+        rss = _current_rss_kb()
+        assert isinstance(rss, int)
+        assert rss > 0
 
 
 class TestRepeatedLimitEnforcementUnderLoad:

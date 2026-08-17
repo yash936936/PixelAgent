@@ -1,0 +1,15 @@
+{
+  "iterations_run": 91600,
+  "completed": 91600,
+  "limit_stops": 0,
+  "errors": 0,
+  "duration_seconds": 14420.093999999808,
+  "rss_start_kb": 87688,
+  "rss_end_kb": 84392,
+  "rss_growth_kb": -3296,
+  "thread_count_start": 1,
+  "thread_count_end": 1,
+  "thread_leak": 0,
+  "final_prune_deleted": 0,
+  "concurrency_guard_clean": true
+}

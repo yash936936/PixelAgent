@@ -2160,3 +2160,76 @@ Phase 3 build
   447 before this entry — 10 new tests). No change to any existing production behavior; every file in this
   entry is new. `docs/PHASES.md`'s Phase 18 status can now read "scaffolding complete, beta window not yet
   started" instead of "entirely unstarted."
+
+
+### [2026-08-17] Real bug found on real Windows hardware: stress_runner.py crashed immediately on
+  `import resource` -- POSIX-only module, wrong for this project's actual target platform
+- **Type:** Bug fix
+- **File(s) affected:** `src/observability/stress_runner.py`, `tests/brain/test_orchestrator_stress.py`.
+- **What happened:** Running `python -m src.observability.stress_runner --iterations 500` on the user's
+  real Windows machine (the first time this module was ever run outside this sandboxed Linux dev
+  environment) failed immediately with `ModuleNotFoundError: No module named 'resource'`, before a single
+  stress iteration ran. `resource` is a POSIX-only stdlib module (Linux/macOS) — it does not exist on
+  Windows at all. Both `stress_runner.py` and `tests/brain/test_orchestrator_stress.py` (2026-08-16 entry)
+  used it directly and unconditionally at module load time. This is a real, embarrassing miss: this
+  project's own `docs/TRD.md`/every phase's file table is explicit that Windows is the actual target
+  platform, and this stress-testing work was written and validated entirely in a Linux sandbox without
+  ever checking cross-platform compatibility of a brand-new stdlib import.
+- **Fix:** Added `_current_rss_kb()` to `stress_runner.py` — a real per-platform implementation, not a
+  dependency addition:
+  - **Windows:** `GetProcessMemoryInfo` via `ctypes` against `psapi.dll` (stdlib-only, no new pip
+    dependency), returning the process's current `WorkingSetSize`.
+  - **POSIX:** the original `resource.getrusage(RUSAGE_SELF).ru_maxrss`, now imported lazily *inside* the
+    POSIX branch of this one function, so the module itself loads cleanly on Windows (where importing it
+    at all would still fail) rather than only the call site being guarded.
+  - **Documented, real difference between the two, not glossed over:** Windows' `WorkingSetSize` is a
+    current reading; POSIX's `ru_maxrss` is a high-water mark. Both still catch the thing that actually
+    matters here — memory that never comes back down across many iterations — but they are not numerically
+    equivalent, and this function's docstring says so rather than implying a false equivalence.
+  - `tests/brain/test_orchestrator_stress.py` updated to import and use the same shared
+    `_current_rss_kb()` rather than duplicating platform logic.
+  - **New regression guard added**: `TestCrossPlatformCompatibility` (2 tests) — one asserts
+    `stress_runner.py`'s source has no unconditional top-level `import resource` (would have caught this
+    exact bug before it ever reached a real Windows machine), one confirms `_current_rss_kb()` returns a
+    real positive number on whatever platform the test suite is actually running on.
+- **Verification:** re-ran the full stress test suite (8/8, up from 6 — 2 new regression tests), a real
+  200-iteration CLI smoke run (`rss_growth_kb: 2048`, 0 leaks, 0 errors), and the full project suite:
+  453 (non-GUI+GUI) + 6 (integration) = 459 passing.
+- **Why:** Direct, real-world consequence of building and validating Phase 15's stress tooling entirely in
+  a Linux sandbox — this is exactly the kind of platform-specific gap `docs/STATUS.md`'s own "real Windows
+  DPI/multi-monitor scaling unverified" caveat already warns can exist between sandbox-verified and
+  hardware-verified work, just manifesting here as an import-time crash instead of a runtime behavior gap.
+- **Impacts:** `python -m src.observability.stress_runner` is now expected to actually run on the real
+  Windows machine it previously crashed on immediately. Phase 15's real-hardware stress run (still the one
+  open item in that phase) can now proceed — this fix was a precondition for it, not a nice-to-have.
+
+
+### [2026-08-17] Second real Windows bug found on the same real hardware run: GetProcessMemoryInfo failed
+  due to missing ctypes argtypes/restype declarations
+- **Type:** Bug fix
+- **File(s) affected:** `src/observability/stress_runner.py`.
+- **What happened:** After the prior entry's `resource`-import fix, running `python -m
+  src.observability.stress_runner --iterations 500` on the user's real Windows machine got further but
+  failed with `OSError: GetProcessMemoryInfo failed`. Root cause: `_current_rss_kb()`'s Windows branch
+  called `ctypes.windll.kernel32.GetCurrentProcess()` and `ctypes.windll.psapi.GetProcessMemoryInfo()`
+  without declaring `argtypes`/`restype`. ctypes defaults an undeclared return value to a 32-bit `c_int` --
+  so `GetCurrentProcess()`'s real return value (a 64-bit pseudo-handle) was silently truncated before it
+  ever reached `GetProcessMemoryInfo()`, which then failed on the corrupted handle. This is the standard,
+  well-documented failure mode of calling any WinAPI function through `ctypes` without explicit type
+  declarations -- not something specific to this function, but a real gap in the original fix all the same.
+- **Fix:** Declared explicit `argtypes`/`restype` on both calls using `ctypes.wintypes` (`HANDLE`, `DWORD`,
+  `BOOL`) rather than leaving them to ctypes' unreliable defaults. On failure, now raises `ctypes.WinError()`
+  (which calls the real `GetLastError()` itself and surfaces Windows' own error text) instead of a bare
+  string, so a future failure of this kind is actually diagnosable from the error message alone.
+- **Honest limitation of this fix, stated plainly:** this sandboxed environment has no Windows runtime, so
+  this specific code path (the `sys.platform == "win32"` branch) has never actually been executed by me --
+  only reasoned through against the documented Win32 API and ctypes' own documented default-typing
+  behavior, and compile/import-checked. The POSIX branch and everything else in this module continues to
+  be verified for real (8/8 stress tests, a 200-iteration smoke run, full suite 459/459) -- but this one
+  branch's real-world correctness can only be confirmed by the user's next actual run on their machine.
+- **Separately, not a code issue:** the user's own command used `logs\stress_smoke` in a Git Bash/MINGW64
+  shell, which silently ate the backslash (not a recognized shell escape), producing `logsstress_smoke` as
+  the actual directory name (visible in the printed `log_dir=` line). Not a bug in this codebase -- flagged
+  to the user to use `logs/stress_smoke` (forward slash, works on Windows too) or a quoted path instead.
+- **Impacts:** `stress_runner.py`'s Windows RSS reading should now actually succeed rather than fail
+  immediately, but this needs the user's next real run to confirm -- not claimed as verified here.
