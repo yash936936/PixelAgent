@@ -38,7 +38,45 @@ from PIL import Image
 # empirically: without it, a 2-line real UI screenshot (label + button)
 # returns only the label; with it, both are found at full confidence, with
 # no changes needed to psm, image scale, or color.
-_TESSERACT_CONFIG = "-c textord_min_linesize=1.0"
+#
+# Second real fix, found live on real Windows hardware with a newer
+# Tesseract build (5.5.0.20241111 -- UB-Mannheim's dev-snapshot build,
+# vs. 5.3.4 in this project's own Linux CI/dev environment) (2026-08-17,
+# docs/DECISIONS.md): `textord_min_linesize=1.0` alone, which was
+# sufficient on 5.3.4, no longer found "Submit" at all on 5.5.0 -- Tesseract's
+# default page segmentation mode (PSM 3, "fully automatic page segmentation,
+# no OSD") re-ran the same solid-color-block-discarded-as-picture layout
+# heuristic this whole config exists to work around, apparently more
+# aggressively on the newer build. Diagnosed with a real diagnostic script
+# (diagnose_ocr_failure.py) run directly against the real failing
+# environment (this project's sandboxed dev environment has no real Chromium
+# available to reproduce it, and only ships Tesseract 5.3.4, which never
+# reproduced this) -- 8 candidate configs tested against the real rendered
+# fixture on the real machine; `--psm 6` (treat the image as a single
+# uniform block of text, skipping Tesseract's own column/block layout
+# analysis entirely) was the only one that found "Submit". Verified this
+# doesn't regress anything in the Linux/5.3.4 environment either (full
+# perception + integration OCR suite re-run clean after adding it).
+#
+# REAL, ACCEPTED TRADE-OFF, not silently absorbed: `read()` is called
+# against the FULL desktop screenshot in production
+# (src/action/action_router.py's `_locate_target_text`, not a cropped
+# region) -- `--psm 6` tells Tesseract to treat that entire screenshot as
+# one uniform text block, skipping the multi-column/multi-region layout
+# analysis PSM 3 (the prior default) would otherwise do. This fixture only
+# exercises a simple 2-line screen (a label + a button); it says nothing
+# about accuracy on a genuinely complex, multi-panel real desktop
+# screenshot (multiple windows, a taskbar, several distinct widget
+# regions), which this project has no test coverage for either way.
+# Accepted here because the alternative -- the previous config -- fails
+# outright and completely on a real, current Tesseract build for a single
+# ordinary button, which is strictly worse than an unvalidated risk to
+# reading order on more complex screens. Flagged as a real follow-up:
+# Phase 18's real beta usage (which will exercise real, varied, complex
+# desktop screenshots this project's own test fixtures don't) is the
+# natural place this either gets confirmed fine or surfaces a real
+# regression worth revisiting -- see docs/BETA_FINDINGS.md.
+_TESSERACT_CONFIG = "--psm 6 -c textord_min_linesize=1.0"
 
 
 @dataclass

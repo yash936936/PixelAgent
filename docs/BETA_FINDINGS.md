@@ -63,7 +63,28 @@ anything beyond the reported issue.
 
 ## Findings
 
-*(No findings recorded yet — this section will be populated once Phase 18's real
-beta cohort starts reporting. This file's structure and the `beta_report.py` tool
-that feeds it were built and tested 2026-08-16, per `docs/DECISIONS.md`'s matching
-entry, ahead of that beta window actually opening.)*
+### [2026-08-17] Pre-flagged risk: OCR now uses `--psm 6` (single uniform text block), unvalidated on
+  complex multi-panel real desktop screenshots
+- **Status: ACCEPTED (pre-flagged ahead of beta, not discovered by a tester)**
+- **What:** `src/perception/ocr.py`'s Tesseract config was changed to `--psm 6` (forces Tesseract to treat
+  the entire screenshot as one uniform text block) to fix a real failure where a newer Tesseract build
+  (5.5.0.20241111) could not find text inside a solid-color button at all, even with the project's existing
+  `textord_min_linesize=1.0` mitigation. Full detail in `docs/DECISIONS.md`'s 2026-08-17 entry.
+- **The real, unvalidated risk:** `read()` runs against the full desktop screenshot in production
+  (`src/action/action_router.py`), not a cropped region. `--psm 6` skips Tesseract's normal multi-column/
+  multi-region layout analysis, which was only tested against this project's own simple, 1-2-line test
+  fixtures. On a genuinely complex real screen (multiple windows, a taskbar, several distinct widget
+  regions), this could plausibly produce worse text ordering or merged/garbled results compared to the
+  prior default (PSM 3) -- this project has no test coverage either way, and the sandboxed dev environment
+  this fix was made in cannot render or test against real, complex desktop screenshots.
+- **If you hit this during beta:** anything where OCR-based `target_text` clicks seem to target the wrong
+  element, miss an element that's clearly visible, or behave inconsistently on a busy/cluttered screen is
+  worth reporting via `beta_report.py` even if it doesn't look OCR-related at first glance -- this is
+  exactly the failure mode this finding is watching for.
+- **Disposition:** accepted for now -- the prior config failed completely and unconditionally for an
+  ordinary button, which is a worse starting point than an unvalidated risk on more complex screens.
+  Revisit if real beta usage surfaces a genuine regression.
+
+*(No tester-reported findings yet -- the entry above was added proactively by the engineering side ahead
+of the beta window opening, not from a real report. See `docs/DECISIONS.md`'s 2026-08-16 entry for when
+this file's structure and `beta_report.py` were built and tested.)*

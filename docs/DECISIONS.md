@@ -2266,3 +2266,46 @@ Phase 3 build
   GitHub actually has, never as the starting point for continued fixes. The user pushing the delivered
   zips' contents to the actual GitHub remote (or an equivalent standing sync) would close this gap
   structurally rather than relying on this per-session discipline.
+
+
+### [2026-08-17] Real fix for the OCR "Submit not found" failure, diagnosed against the real failing
+  environment rather than guessed
+- **Type:** Bug fix
+- **File(s) affected:** `src/perception/ocr.py`, `diagnose_ocr_failure.py` (new, kept in the repo root as
+  a reusable diagnostic tool, not deleted after use), `docs/BETA_FINDINGS.md`.
+- **What happened:** After the prior entry's OCR test fixes (correctly passing `tesseract_cmd` to
+  `OCREngine`), the two real-Tesseract tests still failed on the user's Windows machine --
+  `real_ocr_engine().read(image)` found only `['Username:']`, never `'Submit'`, on the real
+  `button.html` fixture. This project's existing `_TESSERACT_CONFIG = "-c textord_min_linesize=1.0"`
+  (written and verified against Tesseract 5.3.4 in this project's own dev environment) was not sufficient
+  on the user's real, newer Tesseract build (5.5.0.20241111).
+- **Honest limitation acknowledged before fixing anything:** this sandboxed dev environment could not
+  reproduce the failure -- it only has Tesseract 5.3.4 (this exact test passes cleanly there) and no real
+  Chromium binary available to download (a pre-existing, already-documented sandbox network restriction).
+  Rather than guess at a fix the way the first `ctypes` attempt had to be corrected twice, wrote
+  `diagnose_ocr_failure.py` -- a script that renders the real fixture with the user's real Playwright/
+  Chromium and tests 8 candidate Tesseract configs against the real screenshot with the user's real
+  Tesseract 5.5.0 -- and had the user run it on the actual failing machine.
+- **Real result, not guessed:** of 8 candidates tested (the existing config, four PSM variants combined
+  with/without `textord_min_linesize`, and a `textord_tabfind_find_tables=0` variant), only `--psm 6`
+  (forcing Tesseract to treat the whole image as a single uniform text block) found both `"Username:"` and
+  `"Submit"`. Every other candidate, including the previously-working `textord_min_linesize=1.0` alone,
+  found at most one of the two words on the real 5.5.0 build.
+- **Fix:** `_TESSERACT_CONFIG` updated to `"--psm 6 -c textord_min_linesize=1.0"`. Verified this doesn't
+  regress anything in this project's own Linux/5.3.4 dev environment (full `tests/perception/` +
+  `tests/integration/test_real_ocr_pipeline.py` re-run clean, 460/460 for the whole suite).
+- **Real, accepted trade-off, documented rather than glossed over:** `OCREngine.read()` runs against the
+  full desktop screenshot in production (`src/action/action_router.py`'s `_locate_target_text`), not a
+  cropped region. `--psm 6` skips Tesseract's normal multi-column/multi-region layout analysis entirely --
+  this project's own test fixtures are simple 1-2-line screens and say nothing about accuracy on a
+  genuinely complex, multi-panel real desktop screenshot (multiple windows, a taskbar, several distinct
+  widget regions), which has no test coverage either way. Accepted because the prior config failed
+  completely and unconditionally for an ordinary button on a real, current Tesseract build, which is worse
+  than an unvalidated risk on more complex screens. Pre-flagged as a known risk in `docs/BETA_FINDINGS.md`
+  ahead of the beta window opening, rather than waiting for a tester to discover it blind.
+- **Why:** avoids repeating the earlier `ctypes` mistake (handing over an unverified fix a second time) --
+  this fix is grounded in real data from the actual failing environment, not reasoning about documented
+  API behavior alone.
+- **Impacts:** the full test suite (460/460, including both previously-failing OCR tests) should now pass
+  cleanly on the user's real Windows machine. `diagnose_ocr_failure.py` kept in the repo as a reusable tool
+  for any future Tesseract-version-specific OCR regression, rather than a one-off throwaway script.
