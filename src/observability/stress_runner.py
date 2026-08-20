@@ -44,14 +44,37 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from src.action.playwright_driver import PlaywrightDriver
 from src.brain.orchestrator import Orchestrator
+from src.brain.planner import HostedLLMPlanner
 from src.brain.risk_classifier import Risk
+from src.confirmation.gate import ConfirmationGate, GateDecision
 from src.observability.logger import Logger, prune_old_logs
 from src.observability.operational_limits import (
     OperationalLimitExceeded,
     OperationalLimits,
     TaskConcurrencyGuard,
 )
+
+# The single fixed instruction every task runs under --real. Deliberately
+# not configurable (see module docstring "REAL MODE SAFETY") -- narrow and
+# read-only by construction, so nothing riskier can get swapped in for an
+# unattended multi-hour run.
+_REAL_MODE_INSTRUCTION = (
+    "Take a screenshot of the current screen and describe what you see. "
+    "Do not click, type, navigate, or take any other action."
+)
+
+
+def _deny_all_prompt_fn(step, risk, context=None) -> GateDecision:
+    """ConfirmationGate's prompt_fn for --real mode. Auto-denies every
+    External/Destructive step rather than blocking on stdin (which would
+    hang forever with nobody there to answer) or auto-approving (which
+    would be genuinely unsafe for an unattended multi-hour run against
+    real APIs/a real browser). raw_user_input identifies this function by
+    name so a denied-step trace log entry is traceable back to the stress
+    runner, not confused with a real human's denial."""
+    return GateDecision(verdict="denied", raw_user_input="denied by stress_runner._deny_all_prompt_fn")
 
 
 def _current_rss_kb() -> int:
@@ -142,12 +165,36 @@ def _current_rss_kb() -> int:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
 
+def _close_if_possible(obj) -> None:
+    """Best-effort close for any real resource (sqlite-backed stores, DB
+    connections, etc.) that might be wired into a real (non-fake)
+    orchestrator. Fakes mode has nothing to close, so this is a no-op there
+    -- added defensively for real-mode runs where a real MemoryAPI /
+    EpisodicStore holds an open sqlite3 connection to a file under the
+    temp log_dir. Without this, Windows (unlike POSIX) refuses to delete a
+    file that still has an open handle, which is exactly the
+    'PermissionError: WinError 32 ... episodic_memory.db' failure seen
+    during real-mode testing on 2026-08-19 -- see docs/DECISIONS.md.
+    """
+    close = getattr(obj, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass  # best-effort only; never let cleanup itself crash the run
+
+
 def _build_stress_orchestrator(log_dir: Path, guard: TaskConcurrencyGuard) -> Orchestrator:
     """Default fakes, same shape as tests/brain/test_orchestrator_stress.py.
     Swap this out for real components (see this module's docstring) before a
     real multi-hour hardware run -- left as fakes here so this script is
     always safe to smoke-test in any environment, including one with no
-    Chromium/Gemini access at all."""
+    Chromium/Gemini access at all. IMPORTANT for real-mode swaps: if you wire
+    a real MemoryAPI/EpisodicStore into the Orchestrator built here, this
+    function's caller (run_stress) will call _close_if_possible() on the
+    orchestrator's memory object each iteration -- make sure Orchestrator or
+    MemoryAPI exposes a .close() (or a .memory/._memory attribute pointing
+    at something that does) or the fix below can't reach it."""
     planner = MagicMock()
     planner.next_step.side_effect = [{"action": "done"}]
     planner.last_call_cost = 0.0001
@@ -178,12 +225,64 @@ def _build_stress_orchestrator(log_dir: Path, guard: TaskConcurrencyGuard) -> Or
     )
 
 
+def _build_real_stress_orchestrator(
+    cfg, log_dir: Path, guard: TaskConcurrencyGuard, headless: bool = True
+) -> tuple[PlaywrightDriver, Orchestrator]:
+    """Real (non-fake) planner/driver/gate/Orchestrator wiring for --real
+    mode, matching src/main.py's own construction as closely as possible
+    (see main.py's main() for the reference wiring this mirrors) with two
+    deliberate differences required for an unattended run:
+      - gate uses _deny_all_prompt_fn, not console_prompt (would block on
+        stdin forever) or auto_approve_external=True (unsafe unattended).
+      - the instruction every task runs is _REAL_MODE_INSTRUCTION, fixed
+        and read-only, not whatever's passed on the command line.
+
+    Returns (driver, orchestrator) rather than just the orchestrator so the
+    caller can manage the driver's lifecycle (real Chromium launch/close)
+    explicitly per iteration -- deliberately opening/closing fresh every
+    task rather than once for the whole run, since repeated launch/close is
+    exactly where an orphaned-process bug would show up (see module
+    docstring point 4).
+    """
+    planner = HostedLLMPlanner(
+        api_key=cfg.gemini_api_key,
+        model=cfg.llm_model,
+        rate_limit_max_attempts=cfg.rate_limit_max_attempts,
+        rate_limit_max_backoff_seconds=cfg.rate_limit_max_backoff_seconds,
+    )
+    driver = PlaywrightDriver(cfg.default_chrome_profile, cfg.profiles_dir, headless=headless)
+    action_router_module = __import__("src.action.action_router", fromlist=["ActionRouter"])
+    router = action_router_module.ActionRouter(playwright_driver=driver, mouse_keyboard=None, ocr_engine=None)
+    gate = ConfirmationGate(prompt_fn=_deny_all_prompt_fn, auto_approve_external=False)
+    logger = Logger(log_dir)
+    operational_limits = OperationalLimits(
+        max_cost_usd=cfg.max_cost_usd,
+        max_wall_clock_seconds=cfg.max_wall_clock_seconds,
+        max_concurrent_tasks=cfg.max_concurrent_tasks,
+    )
+
+    orch = Orchestrator(
+        planner=planner,
+        driver=driver,
+        action_router=router,
+        gate=gate,
+        logger=logger,
+        max_steps=cfg.max_steps_per_task,
+        log_dir=log_dir,
+        operational_limits=operational_limits,
+        concurrency_guard=guard,
+    )
+    return driver, orch
+
+
 def run_stress(
     log_root: Path,
     iterations: int | None = None,
     duration_seconds: float | None = None,
     retention_days: int = 14,
     progress_every: int = 50,
+    real: bool = False,
+    headless: bool = True,
 ) -> dict:
     """Runs tasks back-to-back until either `iterations` is reached or
     `duration_seconds` elapses (whichever is given -- if both are given,
@@ -195,6 +294,16 @@ def run_stress(
     multi-hour run needs pruning to actually keep the log directory bounded
     DURING the run, not just before it starts.
     """
+    cfg = None
+    if real:
+        import src.config as config_module
+
+        # Fails loudly here, same RuntimeError config.load() itself raises
+        # when GEMINI_API_KEY is missing -- not caught/swallowed, since a
+        # --real run with no real config is a startup-time error, not
+        # something to silently fall back from.
+        cfg = config_module.load()
+
     guard = TaskConcurrencyGuard(max_concurrent=1)
     gc.collect()
     rss_start_kb = _current_rss_kb()
@@ -211,9 +320,15 @@ def run_stress(
         if duration_seconds is not None and (time.monotonic() - start_time) >= duration_seconds:
             break
 
-        orch = _build_stress_orchestrator(log_root, guard)
+        driver = None
         try:
-            result = orch.run_task(f"stress task {i}")
+            if real:
+                driver, orch = _build_real_stress_orchestrator(cfg, log_root, guard, headless=headless)
+                with driver:
+                    result = orch.run_task(_REAL_MODE_INSTRUCTION)
+            else:
+                orch = _build_stress_orchestrator(log_root, guard)
+                result = orch.run_task(f"stress task {i}")
             status = result.get("status")
             if status == "operational_limit_exceeded":
                 limit_stops += 1
@@ -223,6 +338,13 @@ def run_stress(
             limit_stops += 1
         except Exception:  # noqa: BLE001 - a real stress run must keep going and report, not crash
             errors += 1
+        finally:
+            # Close any real per-iteration resource (e.g. a real-mode
+            # MemoryAPI/EpisodicStore's sqlite3 connection) before this
+            # orchestrator goes out of scope, so nothing holds an open file
+            # handle into log_root by the time cleanup runs at the end of
+            # the script. No-op in default fakes mode.
+            _close_if_possible(getattr(orch, "_memory", None))
 
         if guard.active_count != 0:
             # A leaked slot here means every subsequent task would fail --
@@ -281,6 +403,25 @@ def _main() -> None:
              "logs survive after this process exits.",
     )
     parser.add_argument("--out", type=str, default="stress_run_summary.json")
+    parser.add_argument(
+        "--real", action="store_true",
+        help="Use real HostedLLMPlanner + PlaywrightDriver instead of fakes. "
+             "Makes real Gemini API calls and launches a real Chromium browser. "
+             "See this module's docstring, 'REAL MODE SAFETY', for full detail.",
+    )
+    parser.add_argument(
+        "--headless", dest="headless", action="store_true", default=True,
+        help="Run the real browser headless (default).",
+    )
+    parser.add_argument(
+        "--visible", dest="headless", action="store_false",
+        help="Run the real browser visibly (headless=False) -- for --real mode only.",
+    )
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="Skip the interactive confirmation prompt before a --real run "
+             "(for scripting only).",
+    )
     args = parser.parse_args()
 
     if args.iterations is None and args.minutes is None and args.hours is None:
@@ -292,6 +433,22 @@ def _main() -> None:
     elif args.minutes is not None:
         duration_seconds = args.minutes * 60
 
+    if args.real and not args.yes:
+        hours_str = f"{duration_seconds / 3600:.2f}" if duration_seconds is not None else "an unbounded number of"
+        print(
+            "--real mode will:\n"
+            "  - Make real Gemini API calls (spends real quota/money) for every task.\n"
+            "  - Launch and close a real Chromium browser per task (headless).\n"
+            f"  - Run for approximately {hours_str} hours.\n"
+            "  - Auto-deny any External/Destructive-risk step (never blocks on input, "
+            "never takes a real risky action unattended).\n"
+            "See this module's docstring, 'REAL MODE SAFETY', for full detail."
+        )
+        confirm = input("Type 'yes' to proceed: ")
+        if confirm.strip().lower() != "yes":
+            print("Aborted.")
+            raise SystemExit(1)
+
     if args.log_dir is not None:
         log_root = Path(args.log_dir)
         log_root.mkdir(parents=True, exist_ok=True)
@@ -300,12 +457,43 @@ def _main() -> None:
         tmp_ctx = tempfile.TemporaryDirectory(prefix="pixel_stress_")
         log_root = Path(tmp_ctx.name)
 
-    print(f"Starting stress run — log_dir={log_root}")
+    print(f"Starting stress run — mode={'real' if args.real else 'fakes'} log_dir={log_root}")
     try:
-        summary = run_stress(log_root, iterations=args.iterations, duration_seconds=duration_seconds)
+        summary = run_stress(
+            log_root,
+            iterations=args.iterations,
+            duration_seconds=duration_seconds,
+            real=args.real,
+            headless=args.headless,
+        )
     finally:
         if tmp_ctx is not None:
-            tmp_ctx.cleanup()
+            # Retry cleanup a few times with a short backoff: on Windows,
+            # a file handle can take a moment to release even after
+            # _close_if_possible() has run (OS-level flush, AV scan, etc.).
+            # This must never mask a real bug -- if it's still locked after
+            # retrying, we print exactly which file so it's diagnosable
+            # instead of failing with a bare stack trace after a real
+            # multi-hour run.
+            last_err = None
+            for attempt in range(5):
+                try:
+                    tmp_ctx.cleanup()
+                    last_err = None
+                    break
+                except PermissionError as e:
+                    last_err = e
+                    gc.collect()
+                    time.sleep(1.0)
+            if last_err is not None:
+                print(
+                    f"WARNING: could not clean up temp log dir {log_root} "
+                    f"after retrying ({last_err}). The run's own results "
+                    f"above/summary JSON are still valid -- this only means "
+                    f"the temp directory needs manual deletion. See "
+                    f"docs/DECISIONS.md 2026-08-19 entry.",
+                    file=sys.stderr,
+                )
 
     print("\n=== Stress run summary ===")
     for k, v in summary.items():

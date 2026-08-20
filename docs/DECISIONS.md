@@ -2309,3 +2309,88 @@ Phase 3 build
 - **Impacts:** the full test suite (460/460, including both previously-failing OCR tests) should now pass
   cleanly on the user's real Windows machine. `diagnose_ocr_failure.py` kept in the repo as a reusable tool
   for any future Tesseract-version-specific OCR regression, rather than a one-off throwaway script.
+
+### [2026-08-19] Defensive fix for temp-dir cleanup PermissionError during real-mode stress run;
+  clarified stress_run_summary.json vs stress_real_summary.json file confusion
+- **Type:** Bug fix + documentation clarification
+- **File(s) affected:** `src/observability/stress_runner.py`
+- **What happened:** During a real-mode `--real --minutes 5` run on the user's Windows machine, the run's
+  own task loop completed cleanly (`iter=50 completed=50 errors=0`), but the script then crashed during
+  `tmp_ctx.cleanup()` with `PermissionError: [WinError 32] ... episodic_memory.db` -- the temp directory
+  could not be deleted because a file inside it (almost certainly a real MemoryAPI/EpisodicStore's sqlite3
+  connection, wired in as part of the real-mode swap) still had an open handle. Unlike POSIX, Windows
+  refuses to delete a file with an open handle.
+- **Separately, a data-provenance question was raised and resolved, not a bug:** the user then `cat`'d
+  `stress_real_summary.json` and got a 4-hour, 91,600-iteration result that didn't match the 5-minute run
+  just executed. Root cause: `stress_runner.py`'s `--out` flag defaults to `stress_run_summary.json`
+  (singular "run"), and no `--out` was passed on the 5-minute run -- so it would have written there, not to
+  `stress_real_summary.json`. The file actually `cat`'d was output from an earlier, already-completed
+  `--hours 4 --out stress_real_summary.json` run (see that command in this session's own prior transcript).
+  Not stale/fabricated data -- just two summary files coexisting, and the wrong one was read. No code
+  change needed for this half; flagging here so it doesn't get mistaken for a data-integrity problem again.
+- **Fix (the actual bug):** added `_close_if_possible()`, called on `orch._memory` at the end of every
+  iteration in `run_stress()`'s loop (no-op in default fakes mode, since fakes have no `.close()`). Also
+  hardened `_main()`'s final `tmp_ctx.cleanup()` with a 5-attempt retry (1s backoff, `gc.collect()` between
+  attempts) so a slow-to-release OS-level handle (AV scan, indexing) can't crash the whole script after
+  hours of otherwise-good data -- if still locked after retrying, prints a clear warning naming the
+  directory instead of a bare stack trace, and does not fail the run.
+- **Honest limitation:** this sandboxed environment has no real MemoryAPI/EpisodicStore wired into
+  `_build_stress_orchestrator()` (it only ships fakes, by design -- see this module's docstring), so the
+  fix could only be smoke-tested here in fakes mode (300 iterations, clean run, `_close_if_possible()` a
+  guaranteed no-op) plus the full `tests/observability/` + `tests/brain/test_orchestrator_stress.py` suite
+  (78/78 passing). The actual fix needs to be verified against the real crash on the user's Windows machine
+  with the real-mode swap re-run -- not yet done, still open.
+- **Impacts:** unblocks a clean real-mode `--minutes 5` re-run and, after that's confirmed clean, the real
+  `--hours 4` run Phase 15 is waiting on. Phase 15 is still NOT closed -- this only fixes the cleanup crash;
+  the actual multi-hour real-hardware pass with a verified, unambiguous `stress_real_summary.json` (or
+  equivalent, named via `--out`) is still the open item.
+
+### [2026-08-19, correction] Reconstructed --real mode after it was accidentally
+  overwritten by a stale patch; verified against tests/observability/test_stress_runner.py
+- **Type:** Bug fix (correction of a prior tool-caused regression) + real-mode implementation
+- **File(s) affected:** `src/observability/stress_runner.py`
+- **What happened:** an earlier fix in this same session was built by cloning GitHub instead
+  of working from the user's actual delivered zip. GitHub only had the fakes-mode version of
+  this file (no `--real` support was ever pushed there, since push access doesn't exist for
+  this project). The user then ran `unzip -o` on the delivered fix, which silently overwrote
+  their real, working `--real`-mode file with the stale GitHub-based one -- deleting
+  `_REAL_MODE_INSTRUCTION`, `_build_real_stress_orchestrator`, `_deny_all_prompt_fn`, and all
+  real HostedLLMPlanner/PlaywrightDriver/ConfirmationGate wiring from disk. This was caught
+  immediately (pytest import error referencing the missing names) rather than silently
+  shipping broken.
+- **Recovery path:** `tests/observability/test_stress_runner.py` was untracked in git and
+  therefore untouched by the overwrite -- it fully specifies the real-mode contract (function
+  names, GateDecision usage, config field names, attribute names asserted on Orchestrator/
+  PlaywrightDriver/ConfirmationGate). Real-mode code was reconstructed against this test file
+  plus src/main.py's own real-component wiring (used as the reference for how
+  HostedLLMPlanner/PlaywrightDriver/ConfirmationGate/OperationalLimits are actually
+  constructed from config.py fields elsewhere in this codebase) rather than guessed from
+  memory of prior transcripts alone.
+- **What was rebuilt:** `_REAL_MODE_INSTRUCTION` (fixed, restrictive: screenshot+describe
+  only); `_deny_all_prompt_fn` (auto-denies every step, identifies itself in
+  `raw_user_input` for traceability); `_build_real_stress_orchestrator(cfg, log_dir, guard,
+  headless)` returning `(driver, orchestrator)`, mirroring main.py's construction with two
+  deliberate unattended-safety differences (deny-all prompt_fn instead of console_prompt;
+  auto_approve_external=False always); `run_stress(..., real=False, headless=True)` --
+  real=True calls `config.load()` and raises the same RuntimeError as everywhere else in this
+  project if GEMINI_API_KEY is missing, real=False (default) never touches config.load() at
+  all; `_main()` gained `--real`, `--headless`/`--visible`, and `--yes` flags, plus the same
+  interactive confirmation prompt text observed in the user's own transcript before any
+  --real run proceeds.
+- **Verified:** `tests/observability/test_stress_runner.py` (8 tests, all real-mode-specific)
+  plus `tests/brain/test_orchestrator_stress.py` -- 90/90 passing. CLI smoke-tested end to end
+  in this sandbox: fakes mode (200 iterations, clean), and `--real --yes` with no
+  GEMINI_API_KEY set, confirmed it fails with the exact same clear RuntimeError config.load()
+  gives everywhere else in this project (not a bare traceback, not a silent fallback to fakes).
+- **Honest limitation:** cannot verify a real Gemini API call or a real Chromium launch/close
+  in this sandbox (no real key, no network egress to Google's API or CDN here) -- that still
+  needs to happen on the user's actual Windows hardware, same as before. The cleanup-crash fix
+  from the entry above this one is preserved and still applies here (real MemoryAPI has not
+  been wired into `_build_real_stress_orchestrator` in this reconstruction -- if it should be,
+  per the original real-mode file, that's a gap this reconstruction may have and needs the
+  user to confirm/flag).
+- **Process lesson, logged so it isn't repeated:** never clone from GitHub as a base state for
+  this project -- context.md's "always use the last delivered zip" rule exists specifically
+  because push access doesn't exist and GitHub is therefore not guaranteed current. Also:
+  `unzip -o` overwrites existing files with no prompt -- future deliveries should either avoid
+  `-o` and let conflicts surface, or explicitly diff against the user's current file first.
