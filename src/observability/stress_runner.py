@@ -251,8 +251,23 @@ def _build_real_stress_orchestrator(
         rate_limit_max_backoff_seconds=cfg.rate_limit_max_backoff_seconds,
     )
     driver = PlaywrightDriver(cfg.default_chrome_profile, cfg.profiles_dir, headless=headless)
+
+    # Real bug found live (2026-08-27, docs/DECISIONS.md): every single real
+    # task was silently failing at step 1 -- "target_type='desktop' requires
+    # a MouseKeyboard backend -- none was configured" -- because this
+    # function previously hardcoded mouse_keyboard=None. _REAL_MODE_INSTRUCTION
+    # asks for a desktop screenshot, which needs exactly this backend. Fixed
+    # by using the same _build_desktop_backends() helper src/main.py itself
+    # uses for real runs, rather than a stress-runner-specific shortcut that
+    # diverged from how this app actually launches in practice.
+    from src.main import _build_desktop_backends
+
+    mouse_keyboard, ocr_engine = _build_desktop_backends(cfg)
+
     action_router_module = __import__("src.action.action_router", fromlist=["ActionRouter"])
-    router = action_router_module.ActionRouter(playwright_driver=driver, mouse_keyboard=None, ocr_engine=None)
+    router = action_router_module.ActionRouter(
+        playwright_driver=driver, mouse_keyboard=mouse_keyboard, ocr_engine=ocr_engine
+    )
     gate = ConfirmationGate(prompt_fn=_deny_all_prompt_fn, auto_approve_external=False)
     logger = Logger(log_dir)
     operational_limits = OperationalLimits(
@@ -335,6 +350,19 @@ def run_stress(
             status = result.get("status")
             if status == "operational_limit_exceeded":
                 limit_stops += 1
+            elif status == "error":
+                # Real bug found live (2026-08-27, docs/DECISIONS.md): a
+                # task can complete its call to orch.run_task() without
+                # raising, yet still represent a real per-task failure --
+                # Orchestrator sets outcome_status="error" (not an
+                # exception) when a step errors out internally. This was
+                # previously falling into the "anything else counts as
+                # completed" branch below, silently miscounting every
+                # failed real task as a success -- masking a real,
+                # reproducible wiring bug (missing MouseKeyboard backend)
+                # for an entire ~4-hour run.
+                errors += 1
+                consecutive_errors += 1
             else:
                 completed += 1
                 consecutive_errors = 0

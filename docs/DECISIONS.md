@@ -2581,3 +2581,62 @@ Phase 3 build
   `python -m src.security.credential_store` (no flags -- just reports whether something's
   stored) before assuming the fallback path is behaving as intended in practice, not just in
   tests.
+
+### [2026-08-27] Two real bugs found from a live 4-hour run: missing MouseKeyboard
+  wiring caused every real task to silently fail; failed tasks were being miscounted
+  as successes
+- **Type:** Bug fix (both found via real Windows hardware, not caught by any test)
+- **File(s) affected:** `src/observability/stress_runner.py`
+- **What happened:** a real `--real --hours 4` run only completed 7 tasks in over 4
+  hours (should be orders of magnitude more) and never terminated at the 4-hour mark
+  (expected -- the duration check only runs between iterations, not mid-task, so a
+  slow/stuck task can run past the nominal cutoff). Investigating the actual task log
+  for the most recent "completed" task revealed it wasn't a success at all:
+  `{"status": "error", "error": "target_type='desktop' requires a MouseKeyboard backend
+  -- none was configured on this ActionRouter."}`. `_REAL_MODE_INSTRUCTION` asks for a
+  desktop screenshot, which needs exactly that backend -- but
+  `_build_real_stress_orchestrator()` (reconstructed 2026-08-21 after an earlier
+  accidental overwrite, see that entry above) hardcoded `mouse_keyboard=None` instead of
+  using `src/main.py`'s own `_build_desktop_backends(cfg)` helper, which every other real
+  entry point in this codebase uses. Every single real task for the run's entire
+  duration failed at step 1, immediately, for this reason.
+- **Compounding bug, found in the same investigation:** even though every task was
+  failing, `run_stress()`'s result-counting logic (`if status ==
+  "operational_limit_exceeded": limit_stops += 1; else: completed += 1`) counted ALL
+  non-limit-stop outcomes as `completed` -- including `status="error"`, a real, distinct
+  top-level status `Orchestrator.run_task()` returns (confirmed by reading
+  `orchestrator.py`'s `outcome_status` assignments directly) for exactly this kind of
+  internal step failure that doesn't raise an exception. This silently masked the
+  MouseKeyboard bug for the run's entire duration -- the printed progress line's
+  `completed=` count looked like real progress the whole time.
+- **Fix 1:** `_build_real_stress_orchestrator()` now imports and calls
+  `src.main._build_desktop_backends(cfg)` for real `mouse_keyboard`/`ocr_engine`
+  construction, matching how every other real entry point in this codebase wires the
+  `ActionRouter` -- rather than a stress-runner-specific shortcut that had silently
+  diverged from actual production wiring.
+- **Fix 2:** `run_stress()`'s counting logic now has an explicit `elif status == "error":
+  errors += 1` branch, so a real per-task failure is counted as an error (and feeds the
+  `stop_after_consecutive_errors` early-stop from the 2026-08-26 entry above) rather than
+  silently inflating `completed`.
+- **A related, still-open question this run surfaced:** ~20 orphaned `chrome.exe`
+  processes were found alive on the machine after the run was stopped -- worth treating
+  as a real, serious finding, not dismissing as incidental. It's plausible (not yet
+  confirmed) that the extreme slowness (7 tasks in 4+ hours) was partly caused by ever-
+  accumulating zombie Chrome processes competing for system resources on every new
+  `PlaywrightDriver` launch -- exactly the failure mode Phase 15 exists to catch, just
+  surfacing as severe slowdown rather than a crash. NOT yet fixed or root-caused in this
+  entry -- needs a fresh, clean-slate re-run (all chrome.exe processes killed first) with
+  BOTH of today's fixes applied to get a first real reading of throughput/behavior on
+  tasks that actually complete successfully, before concluding anything about a leak in
+  `PlaywrightDriver`'s own launch/close cycle specifically.
+- **Verified:** 90/90 `tests/observability/` + `tests/brain/test_orchestrator_stress.py`
+  passing after both fixes; fakes-mode smoke test (200 iterations) clean; full non-GUI
+  suite 442/444 passing (the 2 unrelated failures are in
+  `tests/perception/test_ocr_solid_background_regression.py`, a different subsystem with
+  no code-path connection to either file changed here -- flagged as likely a pre-existing
+  environment-specific gap, not confirmed against a clean baseline since this sandbox's
+  git history was not available to diff against at the time of this entry).
+- **Still needed:** a fresh real run with both fixes applied, starting from zero orphaned
+  Chrome processes, to get a first honest read on whether real tasks now actually
+  complete, and at what real throughput/RSS/process-count trend over a real multi-hour
+  window.
