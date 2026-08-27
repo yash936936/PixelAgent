@@ -38,3 +38,5 @@ profiles_broken_backup/
 profiles/
 profiles_broken_backup/
 *.dmp
+stress_real_*.json
+*.checkpoint.json
