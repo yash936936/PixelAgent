@@ -110,15 +110,14 @@ jobs:
           draft: true
 
   rollback-note:
-    name: (Reminder) Manual rollback procedure
+    name: (Reminder) Automated rollback is now available
     needs: create-release
     runs-on: ubuntu-latest
     steps:
       - name: Print rollback instructions
         run: |
-          echo "This workflow does not implement automated rollback."
-          echo "Per docs/PHASES.md's Phase 14 success criterion ('a bad release can be"
-          echo "rolled back without manual intervention'), automated rollback is NOT"
-          echo "yet implemented -- see docs/RELEASE_ENGINEERING.md's 'Known gap' section."
-          echo "For now: delete the bad GitHub release + tag, and re-tag the last-known-"
-          echo "good commit to trigger a fresh release build."
+          echo "If this release turns out to be bad, roll it back with the 'Rollback"
+          echo "release' workflow (.github/workflows/rollback.yml) -- trigger it manually"
+          echo "from the Actions tab (workflow_dispatch), supplying this tag name. It"
+          echo "deletes the GitHub release and its tag in one run, no manual git commands"
+          echo "needed. See docs/RELEASE_ENGINEERING.md for the full procedure."

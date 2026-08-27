@@ -57,19 +57,27 @@ def build_env_contents(
     gemini_api_key: str,
     default_chrome_profile: str = "Default",
     profiles_dir: str = "",
+    llm_model: str = "",
 ) -> str:
     """Builds a minimal, valid .env file's contents from wizard input.
     Deliberately minimal -- only the fields the wizard actually collects.
     Every other setting (rate limits, retention, etc.) keeps config.py's
     own sensible defaults rather than the wizard forcing an opinion on
     settings a first-run user has no way to make an informed choice
-    about yet."""
+    about yet. llm_model is the one exception (added to close a Phase 11
+    gap found in Phase 15/16/17's line-by-line review, docs/DECISIONS.md
+    2026-08-21): left blank, LLM_MODEL is simply omitted from the file and
+    config.py's own default ("gemini-3.5-flash-lite") applies -- so leaving
+    the wizard's field empty is always safe and changes nothing for anyone
+    who doesn't touch it."""
     lines = [
         f"GEMINI_API_KEY={gemini_api_key.strip()}",
         f"DEFAULT_CHROME_PROFILE={default_chrome_profile.strip() or 'Default'}",
     ]
     if profiles_dir.strip():
         lines.append(f"PROFILES_DIR={profiles_dir.strip()}")
+    if llm_model.strip():
+        lines.append(f"LLM_MODEL={llm_model.strip()}")
     lines.append("")  # trailing newline
     return "\n".join(lines)
 
@@ -79,12 +87,13 @@ def write_env_file(
     gemini_api_key: str,
     default_chrome_profile: str = "Default",
     profiles_dir: str = "",
+    llm_model: str = "",
 ) -> None:
     """Writes a fresh .env file. Overwrites any existing file at env_path
     outright -- this is only ever called from the wizard after
     needs_setup() already confirmed there's nothing usable there to
     preserve, so there's no partial-merge logic to get wrong."""
     env_path.write_text(
-        build_env_contents(gemini_api_key, default_chrome_profile, profiles_dir),
+        build_env_contents(gemini_api_key, default_chrome_profile, profiles_dir, llm_model),
         encoding="utf-8",
     )

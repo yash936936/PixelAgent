@@ -1,0 +1,79 @@
+name: Rollback release
+
+# Closes Phase 14's remaining gap (docs/PHASES.md's success criterion: "a bad
+# release can be rolled back without manual intervention"). Previously,
+# release.yml's rollback-note job only printed manual git/GitHub-UI steps --
+# see docs/DECISIONS.md's 2026-08-11 entry accepting that as scoped future
+# work. This is that future pass.
+#
+# Manually triggered (workflow_dispatch), not automatic on any push -- a
+# rollback is a deliberate human decision ("this release is bad"), not
+# something that should ever fire on its own. "Without manual intervention"
+# means: once a human decides to roll back, this one workflow run does the
+# whole thing (delete the bad release, delete its tag both locally-tracked
+# and on the remote) -- not that no human is involved in the decision at all.
+#
+# NOT VERIFIED end-to-end -- like release.yml itself (see its own header
+# comment), this hasn't been run against a real tag/release in this project's
+# repo. The individual actions used (softprops/action-gh-release's delete
+# support doesn't exist, so this uses the GitHub CLI directly, which IS a
+# well-established, real command) are standard and well-documented, but
+# confirm this works against a real throwaway tag before relying on it for
+# an actual bad release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The bad release's tag to roll back (e.g. v0.12.5). Required."
+        required: true
+        type: string
+      confirm:
+        description: "Type the tag name again to confirm -- must match 'tag' exactly."
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    name: Delete bad release and tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Confirm inputs match
+        run: |
+          if [ "${{ inputs.tag }}" != "${{ inputs.confirm }}" ]; then
+            echo "::error::'tag' and 'confirm' inputs must match exactly. Got '${{ inputs.tag }}' and '${{ inputs.confirm }}'. Aborting -- nothing was deleted."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Delete the GitHub release (if it exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ inputs.tag }}" >/dev/null 2>&1; then
+            gh release delete "${{ inputs.tag }}" --yes --cleanup-tag
+            echo "Deleted release and tag for ${{ inputs.tag }}."
+          else
+            echo "No GitHub release found for tag ${{ inputs.tag }} -- checking for a bare tag instead."
+          fi
+
+      - name: Delete the git tag if it still exists (release.yml's own trigger)
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/${{ inputs.tag }}$"; then
+            git push origin ":refs/tags/${{ inputs.tag }}"
+            echo "Deleted remote tag ${{ inputs.tag }}."
+          else
+            echo "No remote tag ${{ inputs.tag }} remains -- nothing further to delete."
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Rollback complete for ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The release and its tag have been removed. To ship a corrected build," >> "$GITHUB_STEP_SUMMARY"
+          echo "re-tag the last-known-good commit with a NEW version number and push it" >> "$GITHUB_STEP_SUMMARY"
+          echo "(re-using the same tag name after deletion can confuse anyone who already" >> "$GITHUB_STEP_SUMMARY"
+          echo "pulled the bad one -- see docs/RELEASE_ENGINEERING.md)." >> "$GITHUB_STEP_SUMMARY"

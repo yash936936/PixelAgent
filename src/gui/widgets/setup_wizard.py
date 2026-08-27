@@ -71,6 +71,13 @@ class SetupWizard(QDialog):
         self._profiles_dir_input.setPlaceholderText(r"C:\Users\you\AppData\Local\Google\Chrome\User Data")
         layout.addWidget(self._profiles_dir_input)
 
+        layout.addWidget(
+            QLabel("Gemini model (optional — leave blank to use the default)")
+        )
+        self._llm_model_input = QLineEdit()
+        self._llm_model_input.setPlaceholderText("gemini-3.5-flash-lite")
+        layout.addWidget(self._llm_model_input)
+
         # Permissions explanation + explicit consent (Phase 11's own
         # requirement) -- Get Started stays disabled until both this is
         # checked AND a plausible-looking API key is entered.
@@ -111,5 +118,6 @@ class SetupWizard(QDialog):
             gemini_api_key=api_key,
             default_chrome_profile=self._profile_input.text().strip() or "Default",
             profiles_dir=self._profiles_dir_input.text().strip(),
+            llm_model=self._llm_model_input.text().strip(),
         )
         self.accept()

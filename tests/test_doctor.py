@@ -63,11 +63,25 @@ def test_check_config_fails_without_api_key(monkeypatch):
     ran, and the test's "fails without API key" scenario could never
     actually be constructed. Fixed by also patching load_dotenv itself to a
     no-op for this test, so the deleted env var stays deleted regardless of
-    what real .env file exists on the machine running this suite."""
+    what real .env file exists on the machine running this suite.
+
+    Second real bug found live on Windows (2026-08-26, docs/DECISIONS.md):
+    once config.load() gained a Windows Credential Manager fallback (Phase
+    16 Finding 2), this test failed again the same way -- "assert not
+    True" -- because a real Windows machine's real Credential Manager is a
+    THIRD possible source of a real key (env var, .env file, now Credential
+    Manager) that this test wasn't blocking. Deleting the env var and
+    stubbing load_dotenv was sufficient to simulate "no key anywhere" before
+    that fallback existed; it no longer is on its own. Fixed by also
+    patching credential_store.get_api_key() to None, so this test's actual
+    intent -- no key available from ANY source -- holds regardless of what's
+    actually stored on the machine running the suite."""
     import src.config as config_module
+    import src.security.credential_store as credential_store_module
 
     monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **kw: None)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(credential_store_module, "get_api_key", lambda: None)
     result = check_config()
     assert not result.passed
     assert "GEMINI_API_KEY" in result.detail

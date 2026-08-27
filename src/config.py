@@ -156,6 +156,17 @@ def load(env_path: str | None = None) -> Config:
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
+        # Phase 16 Finding 2 migration path: check the OS credential store
+        # before failing outright. Additive only -- does not change
+        # behavior at all for anyone who hasn't run
+        # `python -m src.security.credential_store --migrate`, since
+        # get_api_key() returns None immediately when nothing's been
+        # migrated there (see credential_store.py's own docstring).
+        from src.security.credential_store import get_api_key as _get_stored_api_key
+
+        api_key = _get_stored_api_key()
+
+    if not api_key:
         raise RuntimeError(
             "GEMINI_API_KEY is not set. Create a .env file (see .env.example) "
             "or export it in your shell before running Pixel. Get a free key at "

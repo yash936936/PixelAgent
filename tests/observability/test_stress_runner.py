@@ -113,10 +113,22 @@ class TestBuildRealStressOrchestrator:
 
 class TestRunStressRealModeRequiresConfig:
     def test_real_true_without_gemini_api_key_raises_clear_error(self, tmp_path, monkeypatch):
+        """Confirms --real fails loudly and clearly when there's no real
+        .env/GEMINI_API_KEY.
+
+        Also patches credential_store.get_api_key() to None (added
+        2026-08-26): confirmed live on real Windows hardware that this
+        test failed with "DID NOT RAISE" once config.load() gained its
+        Credential Manager fallback -- a real machine's real Credential
+        Manager is a second possible source of a real key this test
+        wasn't accounting for. This mock makes the test's actual intent
+        (no key anywhere) explicit and machine-independent again."""
         import src.config as config_module
+        import src.security.credential_store as credential_store_module
 
         monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **kw: None)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setattr(credential_store_module, "get_api_key", lambda: None)
 
         with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
             run_stress(tmp_path, iterations=1, real=True)

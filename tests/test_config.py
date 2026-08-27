@@ -45,7 +45,17 @@ def test_invalid_planner_backend_raises(tmp_path, monkeypatch):
 
 
 def test_missing_api_key_raises(tmp_path, monkeypatch):
+    """Also patches credential_store.get_api_key() to None (2026-08-26):
+    confirmed live on real Windows hardware that this failed with "DID
+    NOT RAISE" once config.load() gained its Credential Manager fallback
+    -- a real Windows Credential Manager is a second possible key source
+    this test wasn't accounting for. See the equivalent fix/comment in
+    tests/test_doctor.py's test_check_config_fails_without_api_key for
+    the full explanation."""
+    import src.security.credential_store as credential_store_module
+
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(credential_store_module, "get_api_key", lambda: None)
     with pytest.raises(RuntimeError):
         config.load(env_path=str(tmp_path / "does_not_exist.env"))
 

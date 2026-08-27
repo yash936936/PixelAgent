@@ -26,3 +26,17 @@ pyautogui==0.9.54
 # encryption: `pip install pywin32`. Not pinned here since it could not be installed/verified in
 # this environment; verify it yourself on your target machine before relying on it in production.
 # pywin32==308
+
+# Cross-platform OS credential store (Windows Credential Manager / macOS Keychain /
+# Linux Secret Service), for src/security/credential_store.py's Phase 16 Finding 2
+# migration (docs/DECISIONS.md 2026-08-21) -- moves GEMINI_API_KEY out of plaintext
+# .env storage. Unlike pywin32 above, this IS installable and testable in this
+# project's Linux environment (verified: 19/19 tests passing here using keyring's
+# backend-injection support), though this sandbox itself has no real backend
+# configured (keyring.backends.fail.Keyring) -- credential_store.py detects that and
+# falls back to .env/the environment automatically, same graceful-degradation
+# pattern as at_rest.py. Real Windows Credential Manager behavior (via pywin32,
+# which keyring pulls in automatically on Windows) still needs verification on
+# real Windows hardware before relying on it in production.
+keyring==25.5.0
+

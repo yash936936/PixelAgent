@@ -81,3 +81,19 @@ def test_write_env_file_overwrites_existing_file(tmp_path):
     write_env_file(env_path, "new-key")
     assert "new-key" in env_path.read_text()
     assert "old-key" not in env_path.read_text()
+
+
+def test_build_env_contents_includes_llm_model_when_provided():
+    contents = build_env_contents("my-key", "Default", "", "gemini-3.0-pro")
+    assert "LLM_MODEL=gemini-3.0-pro" in contents
+
+
+def test_build_env_contents_omits_llm_model_when_blank():
+    contents = build_env_contents("my-key", "Default", "", "")
+    assert "LLM_MODEL=" not in contents
+
+
+def test_write_env_file_persists_llm_model(tmp_path):
+    env_path = tmp_path / ".env"
+    write_env_file(env_path, "my-real-key", "Profile 3", "/some/path", "gemini-3.0-pro")
+    assert "LLM_MODEL=gemini-3.0-pro" in env_path.read_text(encoding="utf-8")
