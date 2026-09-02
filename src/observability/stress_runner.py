@@ -369,7 +369,29 @@ def run_stress(
         except OperationalLimitExceeded:
             limit_stops += 1
             consecutive_errors = 0
-        except Exception:  # noqa: BLE001 - a real stress run must keep going and report, not crash
+        except Exception as exc:  # noqa: BLE001 - a real stress run must keep going and report, not crash
+            # Real gap found live (2026-08-27, docs/DECISIONS.md): this
+            # branch previously just incremented `errors` with no record
+            # of WHAT failed. A real run with 357/394 iterations erroring
+            # had no diagnosable trace of the actual cause anywhere --
+            # only 43 of 394 iterations even got a Logger entry, meaning
+            # most failures happened before orch.run_task() ever started
+            # writing (almost certainly PlaywrightDriver launch itself --
+            # a real, repeated, silent failure with zero visibility).
+            # Printing every exception's type+message here is cheap and
+            # exactly what a real multi-hour run needs to be diagnosable
+            # after the fact, without relying on per-task logs that may
+            # not exist for this class of failure.
+            print(
+                f"[error] iteration {i}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            try:
+                (log_root / "errors.log").open("a", encoding="utf-8").write(
+                    f"[iter {i}] {type(exc).__name__}: {exc}\n"
+                )
+            except OSError:
+                pass  # best-effort only; never let error logging crash the run
             errors += 1
             consecutive_errors += 1
         finally:

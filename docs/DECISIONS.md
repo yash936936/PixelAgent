@@ -2640,3 +2640,37 @@ Phase 3 build
   Chrome processes, to get a first honest read on whether real tasks now actually
   complete, and at what real throughput/RSS/process-count trend over a real multi-hour
   window.
+
+### [2026-08-27, continued] Fixed a real diagnosability gap: run_stress()'s error
+  handler was silently swallowing every exception's actual content
+- **Type:** Bug fix (observability gap, found live while trying to diagnose the
+  MouseKeyboard-fix follow-up run's 357/394 error rate)
+- **File(s) affected:** `src/observability/stress_runner.py`
+- **What happened:** after the MouseKeyboard wiring fix above, a real 5-minute run still
+  showed 357/394 iterations erroring. Trying to diagnose the actual cause hit a dead end:
+  `grep -l '"status": "error"' logs/stress_real_4/*.jsonl` found nothing, and only 43 of 394
+  iterations even had a Logger-written `.jsonl` file at all -- meaning the large majority of
+  failures were happening BEFORE `orch.run_task()` ever got far enough to write anything
+  (almost certainly during `PlaywrightDriver` construction/launch itself, inside the `with
+  driver:` block). The real gap: `run_stress()`'s `except Exception:` handler only ever did
+  `errors += 1` -- it never recorded what the exception actually was, anywhere. A real
+  4-hour run could accumulate thousands of errors with zero way to find out why after the
+  fact.
+- **Fix:** the handler now captures the exception (`except Exception as exc:`), prints
+  `[error] iteration {i}: {type(exc).__name__}: {exc}` to stderr immediately, AND
+  best-effort appends the same line to `<log_root>/errors.log` (a persistent file, not just
+  scrolling terminal output that's gone once a 4-hour run's buffer scrolls past it or the
+  terminal closes). The file write is wrapped in its own `except OSError: pass` so a
+  logging failure itself can never crash the run.
+- **Verified:** 90/90 observability + orchestrator-stress suite passing. Directly smoke-
+  tested the new behavior (not just "no regression") by forcing a real exception through
+  `run_stress()` in fakes mode and confirming both stderr and `errors.log` correctly
+  captured the exception type and message across all 3 forced failures.
+- **Still needed:** re-run the short real-mode smoke test with this fix applied and
+  actually read `logs/<dir>/errors.log` afterward -- that's what will finally reveal
+  whether the 91% error rate is quota exhaustion again, a Chrome profile lock (plausible,
+  given the ~20-23 orphaned chrome.exe processes found alive before this run started --
+  many concurrent/sequential launches against the same persistent
+  `default_chrome_profile` directory can produce a "ProcessSingleton lock" launch failure),
+  or something else entirely. Not yet known -- this entry only fixes the ability to find
+  out.
